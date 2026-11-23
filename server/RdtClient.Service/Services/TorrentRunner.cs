@@ -703,6 +703,20 @@ public class TorrentRunner(
                     continue;
                 }
 
+                // Provider-side check: once the provider lists the files, block executable payloads before anything is
+                // downloaded to the host (covers magnets, NZB links and obfuscated NZBs the pre-provider check can't see).
+                if (settings.Current.General.BlockExecutableDownloads && torrent.Downloads.Count == 0)
+                {
+                    var executables = ExecutableFileDetector.FindExecutables(torrent.Files.Select(m => m.Path));
+
+                    if (executables.Count > 0)
+                    {
+                        await torrents.BlockExecutableTorrent(torrent, executables);
+
+                        continue;
+                    }
+                }
+
                 // Debrid provider is waiting for file selection, select which files to download.
                 if ((torrent.RdStatus == TorrentStatus.WaitingForFileSelection || torrent.RdStatus == TorrentStatus.Finished) &&
                     torrent.FilesSelected == null &&

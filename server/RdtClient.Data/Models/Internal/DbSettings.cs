@@ -88,6 +88,10 @@ Supports the following parameters:
     [Description("Torrents that come from these trackers will not be allowed, this is a failsafe if you are accidentally downloading from private trackers. Will compare by keyword. Define multiple trackers by separating them with a comma.")]
     public String? BannedTrackers { get; set; } = null;
 
+    [DisplayName("Block executable downloads")]
+    [Description("When enabled, NZBs and torrents that contain executable files (.exe, .scr, .bat, .msi, .lnk and similar) are marked as failed instead of downloaded. Uploaded NZB files are checked before they are sent to the provider; everything else is checked against the provider's file list before any file is downloaded to your host. Nothing is executed or deleted. Failed jobs show as failed to Sonarr/Radarr so another release can be grabbed.")]
+    public Boolean BlockExecutableDownloads { get; set; } = true;
+
     [DisplayName("Disable update notifications")]
     [Description("Ignore update notifications. You will still be notified if the version you are running has a security vulnerability.")]
     public Boolean DisableUpdateNotifications { get; set; } = false;

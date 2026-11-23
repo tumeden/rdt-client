@@ -182,7 +182,42 @@ public class Torrents(
 
         await CopyAddedTorrent(nzbNewTorrent);
 
+        // Pre-provider check: the NZB's own file list names the payload. Block before it is ever sent to the provider.
+        if (settings.Current.General.BlockExecutableDownloads)
+        {
+            var executables = ExecutableFileDetector.FindExecutablesInNzb(bytes);
+
+            if (executables.Count > 0)
+            {
+                await BlockExecutableTorrent(nzbNewTorrent, executables);
+            }
+        }
+
         return nzbNewTorrent;
+    }
+
+    /// <summary>
+    ///     Marks a job as failed because it contains executable files: Completed + Error, retries exhausted, no retry.
+    ///     Nothing is deleted. Jobs that are already terminal or that have local downloads are left alone.
+    /// </summary>
+    public virtual async Task BlockExecutableTorrent(Torrent torrent, IReadOnlyList<String> executables)
+    {
+        if (torrent.Completed != null || torrent.Downloads.Count > 0)
+        {
+            return;
+        }
+
+        var error = ExecutableFileDetector.BuildError(executables);
+
+        logger.LogWarning("Blocked {TorrentName} ({TorrentId}): {Error}", torrent.RdName, torrent.TorrentId, error);
+
+        await torrentData.UpdateRetry(torrent.TorrentId, null, torrent.TorrentRetryAttempts);
+        await torrentData.UpdateComplete(torrent.TorrentId, error, DateTimeOffset.UtcNow, false);
+
+        torrent.RetryCount = torrent.TorrentRetryAttempts;
+        torrent.Retry = null;
+        torrent.Error = error;
+        torrent.Completed = DateTimeOffset.UtcNow;
     }
 
     public virtual async Task<Torrent> AddMagnetToDebridQueue(String magnetLink, Torrent torrent)
@@ -388,6 +423,37 @@ public class Torrents(
         if (payloadContent == null)
         {
             throw new("Torrent has no torrent file or magnet link");
+        }
+
+        if (settings.Current.General.BlockExecutableDownloads && torrent is {Type: DownloadType.Nzb, IsFile: true})
+        {
+            // The scheduler works from a per-tick snapshot; skip jobs that were blocked/failed since it was taken.
+            var current = await torrentData.GetById(torrent.TorrentId);
+
+            if (current == null || current.Completed != null || !String.IsNullOrWhiteSpace(current.Error))
+            {
+                return;
+            }
+
+            Byte[]? nzbBytes = null;
+
+            try
+            {
+                nzbBytes = Convert.FromBase64String(payloadContent);
+            }
+            catch (FormatException)
+            {
+                // Not valid base64; the add below reports the problem as before.
+            }
+
+            var executables = nzbBytes == null ? [] : ExecutableFileDetector.FindExecutablesInNzb(nzbBytes);
+
+            if (executables.Count > 0)
+            {
+                await BlockExecutableTorrent(current, executables);
+
+                return;
+            }
         }
 
         logger.LogDebug("Adding {hash} to debrid provider {torrentInfo}", torrent.Hash, torrent.ToLog());
