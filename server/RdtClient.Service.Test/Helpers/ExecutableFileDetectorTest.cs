@@ -96,6 +96,29 @@ public class ExecutableFileDetectorTest
         Assert.StartsWith(ExecutableFileDetector.ErrorPrefix, error);
         Assert.Contains("a.exe", error);
         Assert.Contains("and 2 more", error);
-        Assert.Contains("nothing was executed or deleted", error);
+        Assert.Contains("nothing was executed", error);
+        Assert.DoesNotContain("deleted", error);
+    }
+}
+
+public class ExecutableFileDetectorReviewFixesTest
+{
+    [Fact]
+    public void Nzb_QuotedHarmlessName_PlusUnquotedExe_IsCaught()
+    {
+        var nzb = ExecutableFileDetectorTest.Nzb("\"Synthetic.Show.S01E05.nfo\" payload Synthetic.Show.S01E05.exe yEnc (1/50)");
+
+        Assert.Equal(["Synthetic.Show.S01E05.exe"], RdtClient.Service.Helpers.ExecutableFileDetector.FindExecutablesInNzb(System.Text.Encoding.UTF8.GetBytes(nzb)));
+    }
+
+    [Theory]
+    [InlineData("job/folder/file.mkv", "folder/file.mkv")]
+    [InlineData("job/file.exe", "file.exe")]
+    [InlineData("file.exe", "file.exe")]
+    [InlineData("", "")]
+    [InlineData(null, "")]
+    public void TorBoxMapFilePath_KeepsSingleComponentNames(String? input, String expected)
+    {
+        Assert.Equal(expected, RdtClient.Service.Services.DebridClients.TorBoxDebridClient.MapFilePath(input));
     }
 }

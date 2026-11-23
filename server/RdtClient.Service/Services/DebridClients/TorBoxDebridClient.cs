@@ -539,6 +539,22 @@ public class TorBoxDebridClient(
         return await HandleErrors(() => GetClient().Usenet.GetAvailabilityAsync(hash, true));
     }
 
+    /// <summary>
+    ///     TorBox file names are "jobname/path/file". The leading job folder is dropped, as before; a name without a
+    ///     folder is kept as-is (previously it became an empty path, which also hid it from executable checks).
+    /// </summary>
+    public static String MapFilePath(String? name)
+    {
+        if (String.IsNullOrEmpty(name))
+        {
+            return "";
+        }
+
+        var withoutRoot = String.Join("/", name.Split('/').Skip(1));
+
+        return String.IsNullOrEmpty(withoutRoot) ? name : withoutRoot;
+    }
+
     private DebridClientTorrent Map(TorrentInfoResult torrent)
     {
         return new()
@@ -557,7 +573,7 @@ public class TorBoxDebridClient(
             Added = ChangeTimeZone(torrent.CreatedAt)!.Value,
             Files = (torrent.Files ?? []).Select(m => new DebridClientFile
                                          {
-                                             Path = String.Join("/", m.Name.Split('/').Skip(1)),
+                                             Path = MapFilePath(m.Name),
                                              Bytes = m.Size,
                                              Id = m.Id,
                                              Selected = true
@@ -588,7 +604,7 @@ public class TorBoxDebridClient(
             Added = ChangeTimeZone(usenet.CreatedAt)!.Value,
             Files = (usenet.Files ?? []).Select(m => new DebridClientFile
                                         {
-                                            Path = String.Join("/", m.Name.Split('/').Skip(1)),
+                                            Path = MapFilePath(m.Name),
                                             Bytes = m.Size,
                                             Id = m.Id,
                                             Selected = true

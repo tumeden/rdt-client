@@ -39,6 +39,9 @@ public class Torrents(
 {
     private static readonly SemaphoreSlim RealDebridUpdateLock = new(1, 1);
 
+    /// <summary>Serialises provider-side mutations (submission + RdId write, provider sync, TorBox cleanup deletes).</summary>
+    public static SemaphoreSlim ProviderMutationLock => RealDebridUpdateLock;
+
     private static readonly SemaphoreSlim TorrentResetLock = new(1, 1);
 
     private static readonly JsonSerializerOptions JsonSerializerOptions = new()

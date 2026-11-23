@@ -28,8 +28,8 @@ domain names in NZB subjects. Par2 files and other non-executable files are not 
   used up and no retry is scheduled, so it is never resubmitted.
 - The SABnzbd history shows it as **Failed**, so Sonarr's failed-download handling can blocklist the release and
   Seekarr/Sonarr can grab another one. The qBittorrent API reports `error`.
-- Nothing is executed, opened or deleted. Provider jobs stay in place. The existing "Delete download when in
-  error" setting (default 0) still applies as before.
+- Nothing is executed or opened, and the block itself deletes nothing. However, like any other error, if "Delete download when in error" is above 0 (default 0), that existing setting later removes the job from rdt-client and the provider. Keep it at 0 if you want blocked jobs kept.
+- Both quoted names and unquoted name-like text in NZB subjects are checked, so a payload cannot hide behind one quoted harmless name. TorBox file names without a folder are now kept (they used to map to an empty path).
 - Jobs that already have local downloads are never interrupted.
 
 ## Tests

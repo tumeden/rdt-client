@@ -297,7 +297,90 @@ public class TorBoxOrphanCleanupTest
         Assert.Equal(TimeSpan.FromHours(expected), TorBoxOrphanEvaluator.GetMinAge(configured));
     }
 
-[Fact]    public void Evaluator_KnownJobs_AreNotEvenObserved()    {        var local = new List<Torrent> { new() { Hash = "lh", RdId = "KNOWN", Type = DownloadType.Nzb }, new() { Hash = "th", RdId = "77", Type = DownloadType.Torrent } };        var snapshot = new List<TorBoxJob?> { new() { Type = DownloadType.Nzb, Id = 1, Hash = "known", Active = false }, new() { Type = DownloadType.Torrent, Id = 77, Hash = "z", Active = false }, new() { Type = DownloadType.Nzb, Id = 2, Hash = "orphan", Active = false } };        var result = TorBoxOrphanEvaluator.Evaluate(T0, TimeSpan.FromHours(24), local, snapshot, new());        Assert.Equal(["Nzb:2"], result.State.Observations.Keys);    }
+    [Fact]
+    public void Evaluator_KnownJobs_AreNotEvenObserved()
+    {
+        var local = new List<Torrent> { new() { Hash = "lh", RdId = "KNOWN", Type = DownloadType.Nzb }, new() { Hash = "th", RdId = "77", Type = DownloadType.Torrent } };
+
+        var snapshot = new List<TorBoxJob?>
+        {
+            new() { Type = DownloadType.Nzb, Id = 1, Hash = "known", Active = false },
+            new() { Type = DownloadType.Torrent, Id = 77, Hash = "z", Active = false },
+            new() { Type = DownloadType.Nzb, Id = 2, Hash = "orphan", Active = false }
+        };
+
+        var result = TorBoxOrphanEvaluator.Evaluate(T0, TimeSpan.FromHours(24), local, snapshot, new());
+
+        Assert.Equal(["Nzb:2"], result.State.Observations.Keys);
+    }
+
+    [Fact]
+    public async Task RecordWithoutHash_IsNeverRemoved()
+    {
+        // A tracked NZB is matched by hash; without one we cannot prove it is not ours.
+        _usenetItems = [new Dictionary<String, Object> { ["id"] = 61L, ["active"] = false, ["name"] = "no-hash" }];
+
+        await RunHourly(48);
+
+        VerifyDeleted(DownloadType.Nzb, 61, Times.Never());
+    }
+
+    [Fact]
+    public async Task ConflictingDuplicates_AreNeverRemoved()
+    {
+        // Same id twice (one active), and same hash under two ids.
+        _usenetItems = [Item(71, "dup-a"), Item(71, "dup-a", active: true), Item(72, "dup-b"), Item(73, "dup-b")];
+
+        await RunHourly(48);
+
+        _torBox.Verify(m => m.DeleteProviderJob(It.IsAny<DownloadType>(), It.IsAny<Int64>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task OwnershipIsRecheckedPerItem_JobTrackedAfterEarlierDeleteIsSpared()
+    {
+        _usenetItems = [Item(81, "first"), Item(82, "second")];
+        await RunHourly(24);
+
+        // After the first delete, rdt-client starts tracking the second one.
+        _torBox.Setup(m => m.DeleteProviderJob(DownloadType.Nzb, 81))
+               .Callback(() => _local.Add(new() { Hash = "x2", RdId = "second", Type = DownloadType.Nzb }))
+               .Returns(Task.CompletedTask);
+
+        await RunHourly(1);
+
+        VerifyDeleted(DownloadType.Nzb, 81, Times.Once());
+        VerifyDeleted(DownloadType.Nzb, 82, Times.Never());
+    }
+
+    [Fact]
+    public async Task Delete_WaitsForTheSubmissionLock()
+    {
+        _usenetItems = [Item(91, "locked")];
+        await RunHourly(24);
+
+        await Torrents.ProviderMutationLock.WaitAsync();
+        Task<OrphanCleanupResult> run;
+
+        try
+        {
+            run = Create().RunOnce();
+            await Task.Delay(200);
+
+            VerifyDeleted(DownloadType.Nzb, 91, Times.Never());
+
+            // While the lock is held, rdt-client "submits" the same job and records its hash.
+            _local.Add(new() { Hash = "x3", RdId = "locked", Type = DownloadType.Nzb });
+        }
+        finally
+        {
+            Torrents.ProviderMutationLock.Release();
+        }
+
+        await run;
+
+        VerifyDeleted(DownloadType.Nzb, 91, Times.Never());
+    }
     [Fact]
     public void Parser_MalformedItemsIgnored_BadEnvelopeNull()
     {

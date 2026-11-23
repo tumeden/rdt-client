@@ -89,7 +89,7 @@ Supports the following parameters:
     public String? BannedTrackers { get; set; } = null;
 
     [DisplayName("Block executable downloads")]
-    [Description("When enabled, NZBs and torrents that contain executable files (.exe, .scr, .bat, .msi, .lnk and similar) are marked as failed instead of downloaded. Uploaded NZB files are checked before they are sent to the provider; everything else is checked against the provider's file list before any file is downloaded to your host. Nothing is executed or deleted. Failed jobs show as failed to Sonarr/Radarr so another release can be grabbed.")]
+    [Description("When enabled, NZBs and torrents that contain executable files (.exe, .scr, .bat, .msi, .lnk and similar) are marked as failed instead of downloaded. Uploaded NZB files are checked before they are sent to the provider; everything else is checked against the provider's file list before any file is downloaded to your host. Nothing is executed. Failed jobs show as failed to Sonarr/Radarr so another release can be grabbed. Like any other error, \"Delete download when in error\" (if set above 0) will later remove the job from rdt-client and the provider.")]
     public Boolean BlockExecutableDownloads { get; set; } = true;
 
     [DisplayName("Disable update notifications")]

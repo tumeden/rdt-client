@@ -73,16 +73,12 @@ public static partial class ExecutableFileDetector
                 continue;
             }
 
-            var quoted = QuotedNameRegex().Matches(subject).Select(m => m.Groups["name"].Value).Where(m => m.Contains('.')).ToList();
+            // Quoted names first, then any name-like tokens in the rest of the subject (a poster may quote one
+            // harmless name and leave the payload unquoted).
+            names.AddRange(QuotedNameRegex().Matches(subject).Select(m => m.Groups["name"].Value).Where(m => m.Contains('.')));
 
-            if (quoted.Count > 0)
-            {
-                names.AddRange(quoted);
-
-                continue;
-            }
-
-            names.AddRange(NameTokenRegex().Matches(subject).Select(m => m.Value));
+            var unquoted = QuotedNameRegex().Replace(subject, " ");
+            names.AddRange(NameTokenRegex().Matches(unquoted).Select(m => m.Value));
         }
 
         return names;
@@ -106,7 +102,7 @@ public static partial class ExecutableFileDetector
         var shown = String.Join(", ", executables.Take(5));
         var more = executables.Count > 5 ? $" and {executables.Count - 5} more" : "";
 
-        return $"{ErrorPrefix} ({shown}{more}). Not downloaded; nothing was executed or deleted.";
+        return $"{ErrorPrefix} ({shown}{more}). Not downloaded; nothing was executed.";
     }
 
     [GeneratedRegex("\"(?<name>[^\"]+)\"")]

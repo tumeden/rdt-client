@@ -74,18 +74,29 @@ public static class TorBoxOrphanEvaluator
         var malformed = 0;
         var orphans = 0;
         var eligible = new List<OrphanObservation>();
-        var seenKeys = new HashSet<String>(StringComparer.OrdinalIgnoreCase);
+        // A record needs both a numeric id (to delete) and a hash (NZBs are tracked locally by hash), otherwise it
+        // could be a tracked job we simply fail to recognise.
+        var valid = new List<TorBoxJob>();
 
         foreach (var job in snapshot)
         {
-            if (job?.Id == null)
+            if (job?.Id == null || String.IsNullOrWhiteSpace(job.Hash))
             {
                 malformed++;
 
                 continue;
             }
 
-            if (!seenKeys.Add(job.Key) || IsKnown(job, known) || job.Active != false)
+            valid.Add(job);
+        }
+
+        // Any id or hash that appears more than once is ambiguous (conflicting duplicates): never act on it.
+        var ambiguousKeys = valid.GroupBy(m => m.Key, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var ambiguousHashes = valid.GroupBy(m => m.Hash!.Trim(), StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var job in valid)
+        {
+            if (ambiguousKeys.Contains(job.Key) || ambiguousHashes.Contains(job.Hash!.Trim()) || IsKnown(job, known) || job.Active != false)
             {
                 continue;
             }

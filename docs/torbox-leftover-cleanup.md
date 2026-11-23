@@ -17,8 +17,8 @@ A job on the TorBox account, torrent or Usenet, that meets all three conditions:
 - It is checked hourly. Each check makes two single-attempt list requests (`torrents/mylist` and `usenet/mylist`)
   using the no-retry client. The run time is saved before any request, Retry-After and the shared cooldowns are
   honoured, and errors back off for 1h, 2h, 4h and so on.
-- Local jobs are read after the TorBox lists are fetched, and read again right before any action. Anything
-  rdt-client has started tracking in the meantime is left alone.
+- Records need both a numeric id and a hash. NZBs are tracked by hash, so a record without one is never acted on. An id or hash that appears more than once in the lists is treated as ambiguous and skipped.
+- Local jobs are read after the TorBox lists are fetched. Each delete also re-checks ownership for that job while holding the same lock rdt-client uses to submit jobs and sync with the provider, so a job cannot become tracked between the check and the delete.
 - At most 10 removals per hourly run. On the first error or rate limit, the run stops.
 - If the rdt-client database has no jobs at all (for example a fresh or restored database), nothing is
   reported or removed.

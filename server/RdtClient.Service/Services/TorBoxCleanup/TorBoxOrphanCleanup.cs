@@ -197,24 +197,20 @@ public class TorBoxOrphanCleanup(
 
         if (evaluation.Eligible.Count > 0)
         {
-            // Fresh local read right before acting: anything rdt-client now knows about is left alone.
-            var known = TorBoxOrphanEvaluator.KnownIds(await torrentData.Get());
-
             foreach (var item in evaluation.Eligible)
             {
                 var job = new TorBoxJob { Type = item.Type, Id = item.Id, Hash = item.Hash };
-
-                if (TorBoxOrphanEvaluator.IsKnown(job, known))
-                {
-                    newState.Observations.Remove(job.Key);
-
-                    continue;
-                }
-
                 var label = $"{item.Type} \"{item.Name}\" (TorBox id {item.Id}, inactive leftover since {item.FirstSeenAt:u})";
 
                 if (mode == TorBoxOrphanCleanupMode.ReportOnly)
                 {
+                    if (TorBoxOrphanEvaluator.IsKnown(job, TorBoxOrphanEvaluator.KnownIds(await torrentData.Get())))
+                    {
+                        newState.Observations.Remove(job.Key);
+
+                        continue;
+                    }
+
                     if (item.LastReportedAt == null || now - item.LastReportedAt >= TimeSpan.FromHours(24))
                     {
                         logger.LogWarning("TorBox cleanup (report only): would remove {Item}", label);
@@ -228,7 +224,27 @@ public class TorBoxOrphanCleanup(
 
                 try
                 {
-                    await torBox.DeleteProviderJob(item.Type, item.Id);
+                    // Hold the same lock rdt-client uses for submission (add + RdId write) and provider sync, and
+                    // re-read local ownership for this item inside it, so a job cannot become tracked between the
+                    // check and the delete.
+                    await Torrents.ProviderMutationLock.WaitAsync();
+
+                    try
+                    {
+                        if (TorBoxOrphanEvaluator.IsKnown(job, TorBoxOrphanEvaluator.KnownIds(await torrentData.Get())))
+                        {
+                            newState.Observations.Remove(job.Key);
+
+                            continue;
+                        }
+
+                        await torBox.DeleteProviderJob(item.Type, item.Id);
+                    }
+                    finally
+                    {
+                        Torrents.ProviderMutationLock.Release();
+                    }
+
                     newState.Observations.Remove(job.Key);
                     removed.Add(job.Key);
                     logger.LogWarning("TorBox cleanup: removed leftover {Item}", label);
