@@ -28,5 +28,11 @@ public interface ITorrentData
     Task UpdatePriority(Guid torrentId, Int32? priority);
     Task UpdateRetry(Guid torrentId, DateTimeOffset? dateTime, Int32 retryCount);
     Task UpdateError(Guid torrentId, String error);
+
+    /// <summary>
+    ///     Atomically marks a stalled, submitted, idle job as failed (Completed + Error, retries exhausted, no retry)
+    ///     with a single conditional UPDATE. Returns false and changes nothing if any guard no longer holds.
+    /// </summary>
+    Task<Boolean> TryMarkStalledFailed(Guid torrentId, String expectedRdId, String error, DateTimeOffset completed);
     Task Delete(Guid torrentId);
 }

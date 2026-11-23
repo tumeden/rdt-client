@@ -24,12 +24,12 @@ recreating any container, needs separate approval from the owner.
 | File | Change |
 |---|---|
 | `server/RdtClient.Service/Services/TorrentRunner.cs` | New `OccupiesProviderSlot(Torrent)`: torrents with `Completed` or `Error` set never take a slot. Otherwise the upstream status rule is unchanged. Applies to every provider. |
-| `server/RdtClient.Service/Services/DebridClients/TorBoxDebridClient.cs` | New `GetUsenetSnapshot()`: one rate-limit-aware `mylist` request that returns the raw `active` / `download_present` / `download_finished` flags. |
+| `server/RdtClient.Service/Services/DebridClients/TorBoxDebridClient.cs` | New `GetUsenetMyListJson()`: one rate-limit-aware raw `usenet/mylist` request. Raw JSON is parsed by the watchdog so that a missing `active` / `download_present` / `download_finished` field reads as unknown (never as `false`). |
 | `server/RdtClient.Data/Models/Internal/DbSettings.cs` | New setting `Provider:StalledNzbTimeoutHours` (default 6, minimum 6, `0` turns it off). It shows up in the Settings UI under Provider. |
 | `server/RdtClient.Service/Services/StalledJobs/*` | Watchdog: pure evaluator, persisted state store, TorBox snapshot source, run orchestration. |
 | `server/RdtClient.Service/BackgroundServices/StalledJobWatchdogService.cs` | Hosted service. Waits 10 minutes after startup, wakes every 5 minutes, and runs only when the hourly slot is due. |
 | `server/RdtClient.Service/DiConfig.cs` | DI registration. |
-| `server/RdtClient.Service.Test/...` | 77 new tests (see below). |
+| `server/RdtClient.Service.Test/...` | 111 new tests (see below). |
 
 The TorBox status mapping was left alone on purpose. Mapping `processing` to `Finished` would make these jobs
 look successful, and mapping it to `Error` would fail jobs that are genuinely post-processing.
@@ -82,7 +82,7 @@ Stall age
 
 Mutation safety
 - Before mutating, the job is re-read from the DB only. It must still be a candidate with the same `RdId`
-  and no active download or unpack client.
+  and no active download or unpack client. The write itself is one conditional `UPDATE ... WHERE` (`TorrentData.TryMarkStalledFailed`) that re-applies every guard atomically (not completed/errored/retrying, `DeleteOnError=0`, same `RdId`, status Processing/Downloading, no `Downloads` rows), so a concurrent scheduler, ProviderUpdater or API change makes it write nothing.
 - Jobs with `DeleteOnError > 0` are **skipped** with a warning, because the existing error handling would
   later delete the provider job and local files.
 - No more than 10 jobs are failed per run. The rest are deferred.
@@ -115,8 +115,8 @@ Command (from `server/`):
 dotnet test RdtClient.sln
 ```
 
-Result on this branch (Windows, .NET SDK 10.0.403, 2026-11-23): `RdtClient.Service.Test` 346 passed, 0 failed
-(baseline 269 plus 77 new). `RdtClient.Web.Test` 37 passed, 0 failed.
+Result on this branch (Windows, .NET SDK 10.0.403, 2026-11-23): `RdtClient.Service.Test` 380 passed, 0 failed
+(baseline 269 plus 111 new). `RdtClient.Web.Test` 37 passed, 0 failed.
 
 Mutation check: with the old slot predicate restored, `WatchdogFailure_ReleasesSlot_AndQueuedJobAdvances...` and
 `BuiltInLifetimeExpiry_TerminalJobWithActiveLookingStatus_NoLongerBlocksQueue` both fail. With the fix they pass.
@@ -178,9 +178,8 @@ is needed. Record the resulting image ID or digest as the build artifact identif
 ## Limitations and open points
 
 - Not run against the live TorBox API or the production DB. Every result above comes from synthetic fixtures.
-- TorBox.NET models `active`, `download_present` and `download_finished` as non-nullable bools, so a missing
-  field reads as `false`. A partial payload still cannot qualify unless state is `processing`, progress is
-  1.0 and `download_finished` is true.
+- The raw `mylist` parser treats missing or wrong-typed fields as unknown, so they never qualify (fixed after codex review: TorBox.NET would have defaulted missing bools to `false`). `mylist` is requested with `limit=1000`; jobs beyond that look missing, which only resets their observation.
+- `TorrentRunner` works from a per-tick in-memory snapshot. A tick that loaded the job just before the watchdog failed it can still act on the stale copy once (e.g. if TorBox flips it to Finished in that same second). The watchdog guards prevent the reverse case.
 - The watchdog adds one `mylist` request per hour on top of ProviderUpdater's existing polling.
 - When the job shows as `Failed` in SAB history, Sonarr/Seekarr may call the SAB delete API. What that deletes
   is the existing RDTClient/integration behaviour (`FinishedAction`, `del_files`) and was not changed here.

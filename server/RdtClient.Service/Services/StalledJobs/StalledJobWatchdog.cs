@@ -226,10 +226,15 @@ public class StalledJobWatchdog(
             return false;
         }
 
-        // Same terminal path as the built-in lifetime expiry: exhaust retries, set Completed + Error, retry=false.
-        // No Retry timestamp is set, so TorrentRunner never resubmits it.
-        await torrentData.UpdateRetry(current.TorrentId, null, current.TorrentRetryAttempts);
-        await torrentData.UpdateComplete(current.TorrentId, decision.Reason, now, false);
+        // Same terminal state as the built-in lifetime expiry (retries exhausted, Completed + Error, no Retry),
+        // but written with one conditional UPDATE that re-applies every guard atomically. If a download, retry,
+        // DeleteOnError or status change landed after the read above, nothing is written.
+        if (!await torrentData.TryMarkStalledFailed(current.TorrentId, decision.RdId, decision.Reason, now))
+        {
+            logger.LogInformation("Stall watchdog: skipped {TorrentId}, local state changed before the failure write", decision.TorrentId);
+
+            return false;
+        }
 
         logger.LogWarning("Stall watchdog: marked {TorrentName} ({TorrentId}, hash {RdId}) as failed: {Reason}",
                           current.RdName,

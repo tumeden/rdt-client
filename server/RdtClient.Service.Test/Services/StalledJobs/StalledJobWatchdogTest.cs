@@ -32,18 +32,23 @@ public class StalledJobWatchdogTest
         _torrentData.Setup(m => m.Get()).ReturnsAsync(() => _local.ToList());
         _torrentData.Setup(m => m.GetById(It.IsAny<Guid>())).ReturnsAsync((Guid id) => _local.FirstOrDefault(m => m.TorrentId == id));
 
-        _torrentData.Setup(m => m.UpdateRetry(It.IsAny<Guid>(), null, It.IsAny<Int32>()))
-                    .Callback((Guid id, DateTimeOffset? _, Int32 retry) => _local.First(m => m.TorrentId == id).RetryCount = retry)
-                    .Returns(Task.CompletedTask);
-
-        _torrentData.Setup(m => m.UpdateComplete(It.IsAny<Guid>(), It.IsAny<String?>(), It.IsAny<DateTimeOffset?>(), false))
-                    .Callback((Guid id, String? error, DateTimeOffset? at, Boolean _) =>
+        // In-memory stand-in for the conditional UPDATE (the real SQL guards are tested in TorrentDataStalledFailTests).
+        _torrentData.Setup(m => m.TryMarkStalledFailed(It.IsAny<Guid>(), It.IsAny<String>(), It.IsAny<String>(), It.IsAny<DateTimeOffset>()))
+                    .ReturnsAsync((Guid id, String rdId, String error, DateTimeOffset at) =>
                     {
                         var t = _local.First(m => m.TorrentId == id);
+
+                        if (t.RdId != rdId || t.Completed != null || t.Error != null || t.Downloads.Count > 0 || t.DeleteOnError > 0)
+                        {
+                            return false;
+                        }
+
                         t.Error = error;
                         t.Completed = at;
-                    })
-                    .Returns(Task.CompletedTask);
+                        t.RetryCount = t.TorrentRetryAttempts;
+
+                        return true;
+                    });
     }
 
     private StalledJobWatchdog CreateWatchdog(IStalledJobStateStore? store = null)
@@ -66,8 +71,26 @@ public class StalledJobWatchdogTest
     private void VerifyNoDeletionOrResubmission()
     {
         _torrentData.Verify(m => m.Delete(It.IsAny<Guid>()), Times.Never);
-        _torrentData.Verify(m => m.UpdateRetry(It.IsAny<Guid>(), It.IsNotNull<DateTimeOffset?>(), It.IsAny<Int32>()), Times.Never);
-        _torrentData.Verify(m => m.UpdateComplete(It.IsAny<Guid>(), It.IsAny<String?>(), It.IsAny<DateTimeOffset?>(), true), Times.Never);
+        _torrentData.Verify(m => m.UpdateRetry(It.IsAny<Guid>(), It.IsAny<DateTimeOffset?>(), It.IsAny<Int32>()), Times.Never);
+        _torrentData.Verify(m => m.UpdateComplete(It.IsAny<Guid>(), It.IsAny<String?>(), It.IsAny<DateTimeOffset?>(), It.IsAny<Boolean>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ConditionalWriteRejected_IsNotReportedAsFailed()
+    {
+        var job = SubmittedNzb("cas");
+        _local.Add(job);
+        SnapshotReturns(StalledJob("cas", T0.AddDays(-3)));
+        var watchdog = CreateWatchdog();
+        await watchdog.RunOnce();
+
+        // GetById still shows the old idle state, but the atomic UPDATE sees a change and writes nothing.
+        _torrentData.Setup(m => m.TryMarkStalledFailed(job.TorrentId, It.IsAny<String>(), It.IsAny<String>(), It.IsAny<DateTimeOffset>())).ReturnsAsync(false);
+
+        _clock.Advance(TimeSpan.FromHours(1));
+
+        Assert.Empty((await watchdog.RunOnce()).Failed);
+        Assert.Null(job.Completed);
     }
 
     [Fact]
@@ -242,7 +265,7 @@ public class StalledJobWatchdogTest
 
         foreach (var t in backlog)
         {
-            _torrentData.Verify(m => m.UpdateComplete(t.TorrentId, It.IsAny<String?>(), It.IsAny<DateTimeOffset?>(), It.IsAny<Boolean>()), Times.Never);
+            _torrentData.Verify(m => m.TryMarkStalledFailed(t.TorrentId, It.IsAny<String>(), It.IsAny<String>(), It.IsAny<DateTimeOffset>()), Times.Never);
         }
     }
 
@@ -266,7 +289,7 @@ public class StalledJobWatchdogTest
 
         Assert.Empty(result.Failed);
         Assert.Null(job.Completed);
-        _torrentData.Verify(m => m.UpdateComplete(It.IsAny<Guid>(), It.IsAny<String?>(), It.IsAny<DateTimeOffset?>(), It.IsAny<Boolean>()), Times.Never);
+        _torrentData.Verify(m => m.TryMarkStalledFailed(It.IsAny<Guid>(), It.IsAny<String>(), It.IsAny<String>(), It.IsAny<DateTimeOffset>()), Times.Never);
     }
 
     [Fact]

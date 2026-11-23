@@ -36,6 +36,30 @@ public class TorBoxStalledSlotStarvationTests : IAsyncLifetime
     private readonly TorrentRunnerState _runnerState = new();
     private readonly Mock<IUsenetApi> _usenetApi = new(MockBehavior.Strict);
 
+    // Raw usenet/mylist payload served by the stubbed TorBoxDebridClient.GetUsenetMyListJson().
+    private String _myListJson = """{"success":true,"data":[]}""";
+    private Int32 _myListCalls;
+
+    private static String MyListJson(params (String hash, String state, Double progress, Boolean active, Boolean present, Boolean finished, DateTimeOffset updatedAt)[] jobs)
+    {
+        var data = jobs.Select(j => new Dictionary<String, Object>
+        {
+            ["id"] = 4242,
+            ["hash"] = j.hash,
+            ["name"] = $"Synthetic.{j.hash}",
+            ["download_state"] = j.state,
+            ["progress"] = j.progress,
+            ["active"] = j.active,
+            ["download_present"] = j.present,
+            ["download_finished"] = j.finished,
+            ["size"] = 1_000_000,
+            ["created_at"] = j.updatedAt.ToString("O"),
+            ["updated_at"] = j.updatedAt.ToString("O")
+        });
+
+        return System.Text.Json.JsonSerializer.Serialize(new { success = true, error = (String?) null, data });
+    }
+
     private String DatabasePath => Path.Combine(_directory, "rdtclient.db");
 
     public async Task InitializeAsync()
@@ -85,6 +109,12 @@ public class TorBoxStalledSlotStarvationTests : IAsyncLifetime
         var torBox = new Mock<ITorBoxNetClient>(MockBehavior.Strict);
         torBox.Setup(m => m.Usenet).Returns(_usenetApi.Object);
         client.Protected().Setup<ITorBoxNetClient>("GetClient", ItExpr.IsAny<String>()).Returns(torBox.Object);
+        client.Setup(m => m.GetUsenetMyListJson()).ReturnsAsync(() =>
+        {
+            _myListCalls++;
+
+            return _myListJson;
+        });
 
         return client.Object;
     }
@@ -216,9 +246,7 @@ public class TorBoxStalledSlotStarvationTests : IAsyncLifetime
 
         await using var _ = context;
 
-        var stalledRecord = ProviderRecord(StuckHash, "processing", 1.0, false, false, true, DateTimeOffset.UtcNow.AddDays(-3));
-
-        _usenetApi.Setup(m => m.GetCurrentAsync(true, It.IsAny<Int32>(), It.IsAny<CancellationToken>())).ReturnsAsync(new List<UsenetInfoResult> { stalledRecord });
+        _myListJson = MyListJson((StuckHash, "processing", 1.0, false, false, true, DateTimeOffset.UtcNow.AddDays(-3)));
 
         _usenetApi.Setup(m => m.AddLinkAsync("https://nzb.invalid/synthetic-queued.nzb", It.IsAny<Int32>(), It.IsAny<String?>(), It.IsAny<String?>(), It.IsAny<Boolean>(), It.IsAny<CancellationToken>()))
                   .ReturnsAsync(new Response<UsenetAddResult> { Data = new() { Hash = NewHash } });
@@ -249,7 +277,7 @@ public class TorBoxStalledSlotStarvationTests : IAsyncLifetime
         Assert.Equal(TorrentStatus.Downloading, failed.RdStatus); // still active-looking, like the incident
 
         // Exactly one shared snapshot request per run, no per-job provider lookups by the watchdog.
-        _usenetApi.Verify(m => m.GetCurrentAsync(true, It.IsAny<Int32>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+        Assert.Equal(2, _myListCalls);
         _usenetApi.Verify(m => m.GetHashInfoAsync(StuckHash, It.IsAny<Boolean>(), It.IsAny<Int32>(), It.IsAny<CancellationToken>()), Times.Never);
 
         // 4. Real scheduler: the failed job no longer occupies the slot, the queued job is submitted.
@@ -291,8 +319,7 @@ public class TorBoxStalledSlotStarvationTests : IAsyncLifetime
         await using var _ = context;
 
         // Provider says the job is actively working (not the stalled shape).
-        _usenetApi.Setup(m => m.GetCurrentAsync(true, It.IsAny<Int32>(), It.IsAny<CancellationToken>()))
-                  .ReturnsAsync(new List<UsenetInfoResult> { ProviderRecord(StuckHash, "processing", 1.0, true, false, true, DateTimeOffset.UtcNow.AddDays(-3)) });
+        _myListJson = MyListJson((StuckHash, "processing", 1.0, true, false, true, DateTimeOffset.UtcNow.AddDays(-3)));
 
         for (var i = 0; i < 12; i++)
         {

@@ -446,17 +446,44 @@ public class TorBoxDebridClient(
         return await HandleErrors(() => GetClient().Usenet.GetCurrentAsync(true));
     }
 
-    /// <summary>
-    ///     Single shared snapshot of the account's current Usenet jobs, with the raw TorBox flags
-    ///     (active, download_present, download_finished) that the mapped DebridClientTorrent drops.
-    ///     Uses the rate-limit aware client so a 429 surfaces as RateLimitException with Retry-After.
-    ///     Used by the stalled-job watchdog; one request per call, no per-job lookups.
-    /// </summary>
-    public virtual async Task<IList<UsenetInfoResult>?> GetUsenetSnapshot()
-    {
-        var result = await HandleErrors(() => GetClient(DiConfig.TORBOX_CLIENT_SLOW).Usenet.GetCurrentAsync(true));
+    public const String UsenetMyListUrl = "https://api.torbox.app/v1/api/usenet/mylist?bypass_cache=true&limit=1000";
 
-        return result?.ToList();
+    /// <summary>
+    ///     Raw JSON of one shared usenet/mylist request, for the stalled-job watchdog.
+    ///     Raw on purpose: TorBox.NET deserializes active/download_present/download_finished into non-nullable
+    ///     bools, so an omitted field would silently read as false. The watchdog parses presence itself.
+    ///     Uses the rate-limit aware client; 429 surfaces as RateLimitException with Retry-After.
+    /// </summary>
+    public virtual async Task<String> GetUsenetMyListJson()
+    {
+        var apiKey = settings.Current.Provider.ApiKey;
+
+        if (String.IsNullOrWhiteSpace(apiKey))
+        {
+            throw new("TorBox API Key not set in the settings");
+        }
+
+        var httpClient = httpClientFactory.CreateClient(DiConfig.TORBOX_CLIENT_SLOW);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, UsenetMyListUrl);
+        request.Headers.Authorization = new("Bearer", apiKey);
+
+        using var response = await httpClient.SendAsync(request);
+
+        if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+        {
+            var delay = RateLimitHandler.GetRetryAfterDelay(response);
+            coordinator.UpdateCooldown(TorBoxApiHost, delay);
+
+            throw new RateLimitException("TorBox usenet/mylist rate limited", delay);
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException($"TorBox usenet/mylist returned HTTP {(Int32) response.StatusCode}");
+        }
+
+        return await response.Content.ReadAsStringAsync();
     }
 
     protected virtual async Task<IEnumerable<UsenetInfoResult>?> GetQueuedUsenet()

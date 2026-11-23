@@ -237,6 +237,28 @@ public class TorrentData(DataContext dataContext, ILogger<TorrentData>? logger =
         await dataContext.SaveChangesAsync();
     }
 
+    public async Task<Boolean> TryMarkStalledFailed(Guid torrentId, String expectedRdId, String error, DateTimeOffset completed)
+    {
+        // One UPDATE ... WHERE statement: the guards and the write cannot be interleaved by the scheduler,
+        // ProviderUpdater, API edits or download creation (SQLite executes a single statement atomically).
+        var rows = await dataContext.Torrents
+                                    .Where(m => m.TorrentId == torrentId
+                                                && m.RdId == expectedRdId
+                                                && m.RdAdded != null
+                                                && m.Type == DownloadType.Nzb
+                                                && m.Completed == null
+                                                && m.Error == null
+                                                && m.Retry == null
+                                                && m.DeleteOnError <= 0
+                                                && (m.RdStatus == TorrentStatus.Processing || m.RdStatus == TorrentStatus.Downloading)
+                                                && !dataContext.Downloads.Any(d => d.TorrentId == torrentId))
+                                    .ExecuteUpdateAsync(s => s.SetProperty(m => m.Completed, completed)
+                                                              .SetProperty(m => m.Error, error)
+                                                              .SetProperty(m => m.RetryCount, m => m.TorrentRetryAttempts));
+
+        return rows == 1;
+    }
+
     public async Task UpdateFilesSelected(Guid torrentId, DateTimeOffset datetime)
     {
         var dbTorrent = await dataContext.Torrents.FirstOrDefaultAsync(m => m.TorrentId == torrentId);
