@@ -3,6 +3,7 @@ using System.Net;
 using System.Reflection;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Polly;
 using Polly.Timeout;
 using RateLimitHeaders.Polly;
@@ -11,6 +12,7 @@ using RdtClient.Service.Helpers;
 using RdtClient.Service.Middleware;
 using RdtClient.Service.Services;
 using RdtClient.Service.Services.DebridClients;
+using RdtClient.Service.Services.StalledJobs;
 using RdtClient.Service.Wrappers;
 
 namespace RdtClient.Service;
@@ -50,6 +52,11 @@ public static class DiConfig
         services.AddScoped<DebridLinkClient>();
         services.AddScoped<HighwayDebridClient>();
 
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<IStalledJobStateStore, StalledJobStateStore>();
+        services.AddScoped<IUsenetSnapshotSource, TorBoxUsenetSnapshotSource>();
+        services.AddScoped<StalledJobWatchdog>();
+
         services.AddSingleton<IDownloadableFileFilter, DownloadableFileFilter>();
         services.AddSingleton<ITrackerListGrabber, TrackerListGrabber>();
         services.AddSingleton<IEnricher, Enricher>();
@@ -64,6 +71,7 @@ public static class DiConfig
         services.AddHostedService<UpdateChecker>();
         services.AddHostedService<WatchFolderChecker>();
         services.AddHostedService<WebsocketsUpdater>();
+        services.AddHostedService<StalledJobWatchdogService>();
     }
 
     public static void RegisterHttpClients(this IServiceCollection services)

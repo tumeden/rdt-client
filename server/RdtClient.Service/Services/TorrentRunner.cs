@@ -380,7 +380,7 @@ public class TorrentRunner(
             }
             else
             {
-                var downloadingTorrentsCount = allTorrents.Count(m => m.RdStatus is not (TorrentStatus.Queued or TorrentStatus.Finished or TorrentStatus.Error));
+                var downloadingTorrentsCount = allTorrents.Count(OccupiesProviderSlot);
 
                 var maxParallelDownloads = settings.Current.Provider.MaxParallelDownloads;
 
@@ -783,6 +783,21 @@ public class TorrentRunner(
         {
             Log($"TorrentRunner Tick End (took {sw.ElapsedMilliseconds}ms)");
         }
+    }
+
+    /// <summary>
+    ///     Whether a torrent counts against Provider:MaxParallelDownloads.
+    ///     Terminal torrents (Completed or Error set locally) never occupy a provider slot, even when the last
+    ///     provider poll left an active-looking RdStatus (e.g. TorBox "processing" mapped to Downloading).
+    /// </summary>
+    public static Boolean OccupiesProviderSlot(Torrent torrent)
+    {
+        if (torrent.Completed != null || !String.IsNullOrWhiteSpace(torrent.Error))
+        {
+            return false;
+        }
+
+        return torrent.RdStatus is not (TorrentStatus.Queued or TorrentStatus.Finished or TorrentStatus.Error);
     }
 
     public async Task SetRateLimit(TimeSpan retryAfter, String message)

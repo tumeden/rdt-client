@@ -446,6 +446,19 @@ public class TorBoxDebridClient(
         return await HandleErrors(() => GetClient().Usenet.GetCurrentAsync(true));
     }
 
+    /// <summary>
+    ///     Single shared snapshot of the account's current Usenet jobs, with the raw TorBox flags
+    ///     (active, download_present, download_finished) that the mapped DebridClientTorrent drops.
+    ///     Uses the rate-limit aware client so a 429 surfaces as RateLimitException with Retry-After.
+    ///     Used by the stalled-job watchdog; one request per call, no per-job lookups.
+    /// </summary>
+    public virtual async Task<IList<UsenetInfoResult>?> GetUsenetSnapshot()
+    {
+        var result = await HandleErrors(() => GetClient(DiConfig.TORBOX_CLIENT_SLOW).Usenet.GetCurrentAsync(true));
+
+        return result?.ToList();
+    }
+
     protected virtual async Task<IEnumerable<UsenetInfoResult>?> GetQueuedUsenet()
     {
         return await HandleErrors(() => GetClient().Usenet.GetQueuedAsync(true));

@@ -10,6 +10,35 @@ namespace RdtClient.Service.Test.Services;
 
 public class TorrentRunnerTest
 {
+    [Theory]
+    [InlineData(TorrentStatus.Queued, false)]
+    [InlineData(TorrentStatus.Processing, true)]
+    [InlineData(TorrentStatus.WaitingForFileSelection, true)]
+    [InlineData(TorrentStatus.Downloading, true)]
+    [InlineData(TorrentStatus.Finished, false)]
+    [InlineData(TorrentStatus.Uploading, true)]
+    [InlineData(TorrentStatus.Error, false)]
+    public void OccupiesProviderSlot_ActiveTorrent_UnchangedFromUpstreamBehavior(TorrentStatus status, Boolean expected)
+    {
+        // Provider-agnostic: the same predicate is used for every debrid provider.
+        foreach (var type in new[] { DownloadType.Torrent, DownloadType.Nzb })
+        {
+            Assert.Equal(expected, TorrentRunner.OccupiesProviderSlot(new() { RdStatus = status, Type = type }));
+        }
+    }
+
+    [Theory]
+    [InlineData(TorrentStatus.Processing)]
+    [InlineData(TorrentStatus.WaitingForFileSelection)]
+    [InlineData(TorrentStatus.Downloading)]
+    [InlineData(TorrentStatus.Uploading)]
+    public void OccupiesProviderSlot_TerminalTorrentWithActiveLookingStatus_DoesNotOccupy(TorrentStatus status)
+    {
+        Assert.False(TorrentRunner.OccupiesProviderSlot(new() { RdStatus = status, Completed = DateTimeOffset.UtcNow }));
+        Assert.False(TorrentRunner.OccupiesProviderSlot(new() { RdStatus = status, Completed = DateTimeOffset.UtcNow, Error = "Torrent lifetime of 1 minutes reached" }));
+        Assert.False(TorrentRunner.OccupiesProviderSlot(new() { RdStatus = status, Error = "Could not add to provider" }));
+    }
+
     [Fact]
     public async Task Tick_ShouldNotRequeueCompletedErrorTorrent()
     {
