@@ -49,3 +49,23 @@ domain names in NZB subjects. Par2 files and other non-executable files are not 
   checks remain the backstop for that.
 - Releases with a harmless executable bundled next to the video (rare on Usenet) are also blocked. Turn the
   setting off if that is a problem.
+
+# Not retrying incomplete NZBs
+
+Setting: **Provider → Don't retry incomplete NZBs** (`Provider:NoRetryIncompleteNzbs`). It is **on by default**.
+
+When the provider reports an NZB error whose text means the articles are not available, the job is marked
+failed straight away instead of being resubmitted. These texts count:
+- `failed (Aborted, cannot be completed - https://sabnzbd.org/not-complete)`
+- the TorBox `missing` state
+- any message containing "cannot be completed", "missing articles" or "missing parts"
+
+Normally a provider error deletes the provider job and re-adds the same NZB up to "Automatic retry torrent"
+times, and that can never fix missing articles. With this setting the error text is kept, with
+`Not retried: the NZB cannot be completed.` appended. Retries are used up, nothing is deleted, and SAB
+history shows **Failed**, so Sonarr can pick another release straight away. Other provider errors, and
+torrents, still use the normal retry setting.
+
+Tests (`Regression/ExecutableBlockingTests`) cover each matching text, an unrelated error still retrying, the
+setting turned off, torrents, the text-matching rules, and no re-add or provider delete across ticks. Mutation
+check: disabling the rule makes the tests fail.

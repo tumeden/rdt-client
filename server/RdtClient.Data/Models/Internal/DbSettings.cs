@@ -256,6 +256,10 @@ For HIGHWAY, log in to your HIGHWAY Center and create a token under ""Sitzungen"
     [Description("TorBox only. Checked hourly. A submitted NZB that TorBox keeps reporting as processing at 100%, inactive, finished and without downloadable content, with no local downloads, for this many hours is marked as failed so it stops occupying a provider slot. Provider jobs and files are not deleted. Jobs not yet sent to the provider are never affected. Default 6, minimum 1, 0 to disable.")]
     public Int32 StalledNzbTimeoutHours { get; set; } = 6;
 
+    [DisplayName("Don't retry incomplete NZBs")]
+    [Description("When the provider reports that an NZB cannot be completed (e.g. \"Aborted, cannot be completed\" or missing articles), mark it as failed straight away instead of resubmitting it. Retrying the same NZB cannot recover missing articles. Other provider errors still use the normal retry setting.")]
+    public Boolean NoRetryIncompleteNzbs { get; set; } = true;
+
     [DisplayName("Auto Import Defaults")]
     public DbSettingsDefaultsWithCategory Default { get; set; } = new();
 }

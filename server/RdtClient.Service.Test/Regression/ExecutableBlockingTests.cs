@@ -269,6 +269,122 @@ public class ExecutableBlockingTests : IAsyncLifetime
         _usenetApi.Verify(m => m.ControlAsync(It.IsAny<String>(), It.IsAny<String>(), It.IsAny<Boolean>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    private const String AbortedStatus = "failed (Aborted, cannot be completed - https://sabnzbd.org/not-complete)";
+
+    private async Task<Guid> SeedProviderError(String rawStatus, DownloadType type = DownloadType.Nzb)
+    {
+        await using var seed = CreateContext();
+
+        var torrent = new Torrent
+        {
+            TorrentId = Guid.NewGuid(),
+            Hash = $"local-err-{Guid.NewGuid():N}",
+            RdId = "synthetic0err0hash00000000000000a",
+            RdName = "Synthetic.Show.S01E04",
+            Type = type,
+            ClientKind = Provider.TorBox,
+            Added = DateTimeOffset.UtcNow,
+            RdAdded = DateTimeOffset.UtcNow,
+            RdStatus = TorrentStatus.Error,
+            RdStatusRaw = rawStatus,
+            TorrentRetryAttempts = 2,
+            RetryCount = 0,
+            HostDownloadAction = TorrentHostDownloadAction.DownloadAll,
+            DownloadClient = RdtClient.Data.Enums.DownloadClient.Bezzad
+        };
+
+        seed.Torrents.Add(torrent);
+        await seed.SaveChangesAsync();
+
+        return torrent.TorrentId;
+    }
+
+    [Theory]
+    [InlineData(AbortedStatus)]
+    [InlineData("missing")]
+    [InlineData("failed (Download failed - missing articles)")]
+    public async Task IncompleteNzb_IsFailedWithoutRetry_AndNeverResubmitted(String rawStatus)
+    {
+        var id = await SeedProviderError(rawStatus);
+        var (runner, torrents, context) = Create();
+
+        await using var _ = context;
+
+        for (var i = 0; i < 4; i++)
+        {
+            await runner.Tick();
+        }
+
+        var after = await Reload(id);
+        Assert.NotNull(after.Completed);
+        Assert.Equal($"Debrid error: {rawStatus}. Not retried: the NZB cannot be completed.", after.Error);
+        Assert.Null(after.Retry);
+        Assert.Equal(2, after.RetryCount);
+        Assert.Equal("synthetic0err0hash00000000000000a", after.RdId);
+
+        VerifyNeverUploaded();
+        _usenetApi.Verify(m => m.ControlAsync(It.IsAny<String>(), It.IsAny<String>(), It.IsAny<Boolean>(), It.IsAny<CancellationToken>()), Times.Never);
+
+        var sab = new Sabnzbd(Mock.Of<ILogger<Sabnzbd>>(), torrents, new AppSettings(), _settings);
+        Assert.Equal("Failed", Assert.Single((await sab.GetHistory()).Slots).Status);
+    }
+
+    [Fact]
+    public async Task OtherProviderError_StillUsesNormalRetry()
+    {
+        var id = await SeedProviderError("failed (Some transient provider problem)");
+        var (runner, _, context) = Create();
+
+        await using var _ = context;
+
+        await runner.Tick();
+
+        var after = await Reload(id);
+        Assert.NotNull(after.Retry); // retry scheduled exactly as upstream
+        Assert.Equal(1, after.RetryCount);
+    }
+
+    [Fact]
+    public async Task SettingOff_IncompleteNzbUsesNormalRetry()
+    {
+        _settings.Current.Provider.NoRetryIncompleteNzbs = false;
+        var id = await SeedProviderError(AbortedStatus);
+        var (runner, _, context) = Create();
+
+        await using var _ = context;
+
+        await runner.Tick();
+
+        Assert.NotNull((await Reload(id)).Retry);
+    }
+
+    [Fact]
+    public async Task TorrentWithSameText_UsesNormalRetry()
+    {
+        var id = await SeedProviderError(AbortedStatus, DownloadType.Torrent);
+        var (runner, _, context) = Create();
+
+        await using var _ = context;
+
+        await runner.Tick();
+
+        Assert.NotNull((await Reload(id)).Retry);
+    }
+
+    [Theory]
+    [InlineData(AbortedStatus, true)]
+    [InlineData("MISSING", true)]
+    [InlineData("failed (Aborted, cannot be completed)", true)]
+    [InlineData("failed", false)]
+    [InlineData("error", false)]
+    [InlineData("failed (Server error, try again)", false)]
+    [InlineData("missing_files_in_progress", false)]
+    [InlineData(null, false)]
+    public void IsIncompleteNzbFailure(String? raw, Boolean expected)
+    {
+        Assert.Equal(expected, TorrentRunner.IsIncompleteNzbFailure(raw));
+    }
+
     [Fact]
     public async Task JobAlreadyDownloadingLocally_IsNotInterrupted()
     {

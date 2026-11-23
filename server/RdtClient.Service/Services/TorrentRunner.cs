@@ -698,6 +698,17 @@ public class TorrentRunner(
 
                     Log($"Received provider error: {torrent.RdStatusRaw}, not processing further", torrent);
 
+                    if (settings.Current.Provider.NoRetryIncompleteNzbs && torrent.Type == DownloadType.Nzb && IsIncompleteNzbFailure(torrent.RdStatusRaw))
+                    {
+                        // Missing articles: resubmitting the same NZB cannot succeed. Fail now, no retry.
+                        logger.LogWarning("NZB cannot be completed at provider, failing without retry: {Status} {Torrent}", torrent.RdStatusRaw, torrent.ToLog());
+
+                        await torrents.UpdateRetry(torrent.TorrentId, null, torrent.TorrentRetryAttempts);
+                        await torrents.UpdateComplete(torrent.TorrentId, $"Debrid error: {torrent.RdStatusRaw}. Not retried: the NZB cannot be completed.", DateTimeOffset.UtcNow, false);
+
+                        continue;
+                    }
+
                     await torrents.UpdateComplete(torrent.TorrentId, $"Debrid error: {torrent.RdStatusRaw}.", DateTimeOffset.UtcNow, true);
 
                     continue;
@@ -804,6 +815,27 @@ public class TorrentRunner(
     ///     Terminal torrents (Completed or Error set locally) never occupy a provider slot, even when the last
     ///     provider poll left an active-looking RdStatus (e.g. TorBox "processing" mapped to Downloading).
     /// </summary>
+    /// <summary>
+    ///     Provider error text meaning the NZB's articles are not available, so a resubmission of the same NZB
+    ///     cannot succeed (e.g. TorBox "failed (Aborted, cannot be completed - https://sabnzbd.org/not-complete)"
+    ///     or the TorBox "missing" state).
+    /// </summary>
+    public static Boolean IsIncompleteNzbFailure(String? rawStatus)
+    {
+        if (String.IsNullOrWhiteSpace(rawStatus))
+        {
+            return false;
+        }
+
+        var status = rawStatus.Trim();
+
+        return status.Equals("missing", StringComparison.OrdinalIgnoreCase)
+               || status.Contains("cannot be completed", StringComparison.OrdinalIgnoreCase)
+               || status.Contains("sabnzbd.org/not-complete", StringComparison.OrdinalIgnoreCase)
+               || status.Contains("missing articles", StringComparison.OrdinalIgnoreCase)
+               || status.Contains("missing parts", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static Boolean OccupiesProviderSlot(Torrent torrent)
     {
         if (torrent.Completed != null || !String.IsNullOrWhiteSpace(torrent.Error))
