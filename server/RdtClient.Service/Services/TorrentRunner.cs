@@ -554,6 +554,20 @@ public class TorrentRunner(
                         return;
                     }
 
+                    // Last line of defence: the real file name may only be known now (after unrestricting the link).
+                    if (settings.Current.General.BlockExecutableDownloads && ExecutableFileDetector.IsExecutable(download.FileName))
+                    {
+                        var blockedError = ExecutableFileDetector.BuildError([download.FileName!]);
+                        logger.LogWarning("Not downloading executable file {FileName} {Torrent}", download.FileName, torrent.ToLog());
+
+                        await downloads.UpdateError(download.DownloadId, blockedError);
+                        await downloads.UpdateCompleted(download.DownloadId, DateTimeOffset.UtcNow);
+                        download.Error = blockedError;
+                        download.Completed = DateTimeOffset.UtcNow;
+
+                        continue;
+                    }
+
                     Log($"Marking download as started", download, torrent);
 
                     download.DownloadStarted = DateTime.UtcNow;

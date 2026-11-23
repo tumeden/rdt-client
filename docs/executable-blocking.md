@@ -21,6 +21,8 @@ domain names in NZB subjects. Par2 files and other non-executable files are not 
 3. **When the provider has listed the job's files, before anything is downloaded to the host.** This covers
    magnets, NZB links and obfuscated NZBs whose real file names only appear after the provider processes them.
    That job has already used a provider slot by the time it is blocked.
+4. **At download creation**, after rdt-client refreshes the job from the provider: the refreshed file list and the exact files about to be queued are checked again before any download row is created.
+5. **At download start**, once the real file name is known: a single executable file is never started. That download is marked as errored, and the job then completes as failed.
 
 ## What "blocked" means
 

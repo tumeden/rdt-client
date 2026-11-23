@@ -67,7 +67,7 @@ public class ExecutableBlockingTests : IAsyncLifetime
 
         var client = new Mock<TorBoxDebridClient>(Mock.Of<ILogger<TorBoxDebridClient>>(),
                                                   new Mock<IHttpClientFactory>(MockBehavior.Strict).Object,
-                                                  Mock.Of<IDownloadableFileFilter>(),
+                                                  Mock.Of<IDownloadableFileFilter>(m => m.IsDownloadable(It.IsAny<Torrent>(), It.IsAny<String>(), It.IsAny<Int64>()) == true),
                                                   new RateLimitCoordinator(),
                                                   _settings)
         {
@@ -78,9 +78,10 @@ public class ExecutableBlockingTests : IAsyncLifetime
         torBox.Setup(m => m.Usenet).Returns(_usenetApi.Object);
         client.Protected().Setup<ITorBoxNetClient>("GetClient", ItExpr.IsAny<String>()).Returns(torBox.Object);
 
-        var torrents = new Torrents(Mock.Of<ILogger<Torrents>>(), data, Mock.Of<IDownloads>(), null!, null!, null!, null!, null!, null!, null!, client.Object, null!, _settings, _runnerState);
+        var realDownloads = new Downloads(new DownloadData(context));
+        var torrents = new Torrents(Mock.Of<ILogger<Torrents>>(), data, realDownloads, null!, null!, null!, null!, null!, null!, null!, client.Object, null!, _settings, _runnerState);
 
-        var runner = new TorrentRunner(Mock.Of<ILogger<TorrentRunner>>(), torrents, new(null!), new(null!, torrents), Mock.Of<IHttpClientFactory>(), new RateLimitCoordinator(), _settings, _runnerState);
+        var runner = new TorrentRunner(Mock.Of<ILogger<TorrentRunner>>(), torrents, realDownloads, new(null!, torrents), Mock.Of<IHttpClientFactory>(), new RateLimitCoordinator(), _settings, _runnerState);
 
         return (runner, torrents, context);
     }
@@ -383,6 +384,151 @@ public class ExecutableBlockingTests : IAsyncLifetime
     public void IsIncompleteNzbFailure(String? raw, Boolean expected)
     {
         Assert.Equal(expected, TorrentRunner.IsIncompleteNzbFailure(raw));
+    }
+
+    private static UsenetInfoResult ProviderNzb(String hash, params String[] fileNames)
+    {
+        return new()
+        {
+            Id = 9001,
+            Hash = hash,
+            Name = "Synthetic.Show.S01E06",
+            DownloadState = "completed",
+            DownloadPresent = true,
+            DownloadFinished = true,
+            Progress = 1,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+            Files = fileNames.Select((n, i) => new UsenetInfoResultFile { Id = i + 1, Name = $"Synthetic.Show.S01E06/{n}", Size = 1000 }).ToArray()
+        };
+    }
+
+    [Fact]
+    public async Task ExeRevealedByRefreshAtDownloadCreation_IsBlocked_NoDownloadRows()
+    {
+        // David's scenario: stored file list is clean, the provider refresh inside CreateDownloads reveals an .exe.
+        const String hash = "synthetic0boundary0hash000000000b";
+        Guid id;
+
+        await using (var seed = CreateContext())
+        {
+            var torrent = new Torrent
+            {
+                TorrentId = Guid.NewGuid(),
+                Hash = "local-boundary",
+                RdId = hash,
+                RdName = "Synthetic.Show.S01E06",
+                Type = DownloadType.Nzb,
+                ClientKind = Provider.TorBox,
+                Added = DateTimeOffset.UtcNow,
+                RdAdded = DateTimeOffset.UtcNow,
+                RdStatus = TorrentStatus.Finished,
+                FilesSelected = DateTimeOffset.UtcNow,
+                TorrentRetryAttempts = 1,
+                HostDownloadAction = TorrentHostDownloadAction.DownloadAll,
+                DownloadClient = RdtClient.Data.Enums.DownloadClient.Bezzad,
+                RdFiles = System.Text.Json.JsonSerializer.Serialize(new List<DebridClientFile> { new() { Id = 1, Path = "Synthetic.Show.S01E06.mkv", Bytes = 1000 } })
+            };
+
+            seed.Torrents.Add(torrent);
+            await seed.SaveChangesAsync();
+            id = torrent.TorrentId;
+        }
+
+        var refreshed = ProviderNzb(hash, "Synthetic.Show.S01E06.mkv", "Synthetic.Show.S01E06.exe");
+        _usenetApi.Setup(m => m.GetHashInfoAsync(hash, true, It.IsAny<Int32>(), It.IsAny<CancellationToken>())).ReturnsAsync(refreshed);
+        _usenetApi.Setup(m => m.GetCurrentAsync(true, It.IsAny<Int32>(), It.IsAny<CancellationToken>())).ReturnsAsync(new List<UsenetInfoResult> { refreshed });
+
+        var (runner, _, context) = Create();
+
+        await using var _ = context;
+
+        await runner.Tick();
+
+        var after = await Reload(id);
+        Assert.StartsWith(ExecutableFileDetector.ErrorPrefix, after.Error);
+        Assert.Contains("Synthetic.Show.S01E06.exe", after.Error);
+        Assert.NotNull(after.Completed);
+        Assert.Empty(after.Downloads);
+    }
+
+    [Fact]
+    public async Task CleanRefreshAtDownloadCreation_CreatesDownloads()
+    {
+        const String hash = "synthetic0clean0boundary000000000";
+        Guid id;
+
+        await using (var seed = CreateContext())
+        {
+            var torrent = new Torrent
+            {
+                TorrentId = Guid.NewGuid(), Hash = "local-clean-boundary", RdId = hash, RdName = "Synthetic.Show.S01E07",
+                Type = DownloadType.Nzb, ClientKind = Provider.TorBox, Added = DateTimeOffset.UtcNow, RdAdded = DateTimeOffset.UtcNow,
+                RdStatus = TorrentStatus.Finished, FilesSelected = DateTimeOffset.UtcNow, TorrentRetryAttempts = 1,
+                HostDownloadAction = TorrentHostDownloadAction.DownloadAll, DownloadClient = RdtClient.Data.Enums.DownloadClient.Bezzad
+            };
+
+            seed.Torrents.Add(torrent);
+            await seed.SaveChangesAsync();
+            id = torrent.TorrentId;
+        }
+
+        var refreshed = ProviderNzb(hash, "Synthetic.Show.S01E07.mkv");
+        _usenetApi.Setup(m => m.GetHashInfoAsync(hash, true, It.IsAny<Int32>(), It.IsAny<CancellationToken>())).ReturnsAsync(refreshed);
+        _usenetApi.Setup(m => m.GetCurrentAsync(true, It.IsAny<Int32>(), It.IsAny<CancellationToken>())).ReturnsAsync(new List<UsenetInfoResult> { refreshed });
+
+        var (runner, _, context) = Create();
+
+        await using var _ = context;
+
+        await runner.Tick();
+
+        var after = await Reload(id);
+        Assert.Null(after.Error);
+        Assert.Single(after.Downloads);
+    }
+
+    [Fact]
+    public async Task QueuedDownloadWithExecutableName_IsNotStarted()
+    {
+        Guid downloadId;
+
+        await using (var seed = CreateContext())
+        {
+            var torrent = new Torrent
+            {
+                TorrentId = Guid.NewGuid(), Hash = "local-dl-start", RdId = "synthetic0dlstart0hash00000000000", RdName = "Synthetic.Show.S01E08",
+                Type = DownloadType.Nzb, ClientKind = Provider.TorBox, Added = DateTimeOffset.UtcNow, RdAdded = DateTimeOffset.UtcNow,
+                RdStatus = TorrentStatus.Finished, FilesSelected = DateTimeOffset.UtcNow, TorrentRetryAttempts = 1,
+                HostDownloadAction = TorrentHostDownloadAction.DownloadAll, DownloadClient = RdtClient.Data.Enums.DownloadClient.Bezzad
+            };
+
+            var download = new Download
+            {
+                DownloadId = Guid.NewGuid(), TorrentId = torrent.TorrentId, Path = "https://torbox.app/fakedl/1/1",
+                Link = "https://download.invalid/synthetic", FileName = "Synthetic.Show.S01E08.exe",
+                Added = DateTimeOffset.UtcNow, DownloadQueued = DateTimeOffset.UtcNow.AddMinutes(-1)
+            };
+
+            seed.Torrents.Add(torrent);
+            seed.Downloads.Add(download);
+            await seed.SaveChangesAsync();
+            downloadId = download.DownloadId;
+        }
+
+        var (runner, _, context) = Create();
+
+        await using var _ = context;
+
+        await runner.Tick();
+
+        Assert.Empty(_runnerState.ActiveDownloadClients);
+
+        await using var verify = CreateContext();
+        var after = await verify.Downloads.AsNoTracking().SingleAsync(m => m.DownloadId == downloadId);
+        Assert.StartsWith(ExecutableFileDetector.ErrorPrefix, after.Error);
+        Assert.NotNull(after.Completed);
+        Assert.Null(after.DownloadStarted);
     }
 
     [Fact]

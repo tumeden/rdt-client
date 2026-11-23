@@ -546,6 +546,20 @@ public class Torrents(
             return;
         }
 
+        // Download boundary: GetById above refreshed provider metadata, so re-check the refreshed file list and the
+        // exact files about to be queued before any download row is created.
+        if (settings.Current.General.BlockExecutableDownloads)
+        {
+            var executables = ExecutableFileDetector.FindExecutables(torrent.Files.Select(m => m.Path).Concat(downloadInfos.Select(m => m.FileName)));
+
+            if (executables.Count > 0)
+            {
+                await BlockExecutableTorrent(torrent, executables);
+
+                return;
+            }
+        }
+
         foreach (var downloadInfo in downloadInfos)
         {
             var addResult = await downloads.TryAddForTorrent(torrent.TorrentId, downloadInfo);
