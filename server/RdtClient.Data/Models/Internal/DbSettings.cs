@@ -92,6 +92,10 @@ Supports the following parameters:
     [Description("When enabled, NZBs and torrents that contain executable files (.exe, .scr, .bat, .msi, .lnk and similar) are marked as failed instead of downloaded. Uploaded NZB files are checked before they are sent to the provider; everything else is checked against the provider's file list before any file is downloaded to your host. Nothing is executed. Failed jobs show as failed to Sonarr/Radarr so another release can be grabbed. Like any other error, \"Delete download when in error\" (if set above 0) will later remove the job from rdt-client and the provider.")]
     public Boolean BlockExecutableDownloads { get; set; } = true;
 
+    [DisplayName("Executable files in a release")]
+    [Description("Only used when \"Block executable downloads\" is on. \"Fail the whole job\" (recommended) rejects any release that contains an executable so Sonarr/Radarr can grab a different one. \"Skip only the executable files\" downloads the rest of the release and leaves the executables out; a release that has nothing but executables (plus par2/nfo/sfv/txt) is still failed. TorBox zipped downloads cannot be split, so they are always failed.")]
+    public ExecutableDownloadAction ExecutableDownloadAction { get; set; } = ExecutableDownloadAction.FailJob;
+
     [DisplayName("Disable update notifications")]
     [Description("Ignore update notifications. You will still be notified if the version you are running has a security vulnerability.")]
     public Boolean DisableUpdateNotifications { get; set; } = false;

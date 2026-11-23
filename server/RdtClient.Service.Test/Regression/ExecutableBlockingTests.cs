@@ -531,6 +531,132 @@ public class ExecutableBlockingTests : IAsyncLifetime
         Assert.Null(after.DownloadStarted);
     }
 
+    private static Byte[] MixedNzb()
+    {
+        return Encoding.UTF8.GetBytes(ExecutableFileDetectorTest.Nzb("[1/3] - \"Synthetic.Movie.mkv\" yEnc (1/900)", "[2/3] - \"Codec.Installer.exe\" yEnc (1/5)", "[3/3] - \"Synthetic.Movie.par2\" yEnc (1/1)"));
+    }
+
+    [Fact]
+    public async Task SkipMode_MixedNzb_IsSubmitted()
+    {
+        _settings.Current.General.ExecutableDownloadAction = ExecutableDownloadAction.SkipExecutableFiles;
+        var (runner, torrents, context) = Create();
+
+        await using var _ = context;
+        AllowNzbUpload("synthetic0mixed0hash0000000000001");
+
+        var added = await torrents.AddNzbFileToDebridQueue(MixedNzb(), "Synthetic.Movie.nzb", Template());
+        Assert.Null((await Reload(added.TorrentId)).Error);
+
+        await runner.Tick();
+
+        Assert.Equal("synthetic0mixed0hash0000000000001", (await Reload(added.TorrentId)).RdId);
+    }
+
+    [Fact]
+    public async Task SkipMode_ExeOnlyNzb_IsStillFailed()
+    {
+        _settings.Current.General.ExecutableDownloadAction = ExecutableDownloadAction.SkipExecutableFiles;
+        var (_, torrents, context) = Create();
+
+        await using var _ = context;
+
+        var added = await torrents.AddNzbFileToDebridQueue(ExeNzb(), "Synthetic.Show.S01E01.nzb", Template());
+
+        Assert.StartsWith(ExecutableFileDetector.ErrorPrefix, (await Reload(added.TorrentId)).Error);
+        VerifyNeverUploaded();
+    }
+
+    [Fact]
+    public async Task SkipMode_DownloadCreation_QueuesOnlyNonExecutables()
+    {
+        _settings.Current.General.ExecutableDownloadAction = ExecutableDownloadAction.SkipExecutableFiles;
+        const String hash = "synthetic0skip0boundary0000000002";
+        Guid id;
+
+        await using (var seed = CreateContext())
+        {
+            var torrent = new Torrent
+            {
+                TorrentId = Guid.NewGuid(), Hash = "local-skip", RdId = hash, RdName = "Synthetic.Show.S01E06",
+                Type = DownloadType.Nzb, ClientKind = Provider.TorBox, Added = DateTimeOffset.UtcNow, RdAdded = DateTimeOffset.UtcNow,
+                RdStatus = TorrentStatus.Finished, FilesSelected = DateTimeOffset.UtcNow, TorrentRetryAttempts = 1,
+                HostDownloadAction = TorrentHostDownloadAction.DownloadAll, DownloadClient = RdtClient.Data.Enums.DownloadClient.Bezzad
+            };
+
+            seed.Torrents.Add(torrent);
+            await seed.SaveChangesAsync();
+            id = torrent.TorrentId;
+        }
+
+        var refreshed = ProviderNzb(hash, "Synthetic.Show.S01E06.mkv", "Codec.Installer.exe");
+        _usenetApi.Setup(m => m.GetHashInfoAsync(hash, true, It.IsAny<Int32>(), It.IsAny<CancellationToken>())).ReturnsAsync(refreshed);
+        _usenetApi.Setup(m => m.GetCurrentAsync(true, It.IsAny<Int32>(), It.IsAny<CancellationToken>())).ReturnsAsync(new List<UsenetInfoResult> { refreshed });
+
+        var (runner, _, context) = Create();
+
+        await using var _ = context;
+
+        await runner.Tick();
+
+        var after = await Reload(id);
+        Assert.Null(after.Error);
+        Assert.Equal(["Synthetic.Show.S01E06.mkv"], after.Downloads.Select(m => m.FileName));
+    }
+
+    [Theory]
+    [InlineData(ExecutableDownloadAction.SkipExecutableFiles, false)]
+    [InlineData(ExecutableDownloadAction.FailJob, true)]
+    public async Task DownloadStart_ExeNextToVideo_SkippedOrFailedByMode(ExecutableDownloadAction action, Boolean expectError)
+    {
+        _settings.Current.General.ExecutableDownloadAction = action;
+        Guid exeId;
+
+        await using (var seed = CreateContext())
+        {
+            var torrent = new Torrent
+            {
+                TorrentId = Guid.NewGuid(), Hash = "local-dl-mixed", RdId = "synthetic0dlmixed0hash00000000003", RdName = "Synthetic.Movie",
+                Type = DownloadType.Nzb, ClientKind = Provider.TorBox, Added = DateTimeOffset.UtcNow, RdAdded = DateTimeOffset.UtcNow,
+                RdStatus = TorrentStatus.Finished, FilesSelected = DateTimeOffset.UtcNow, TorrentRetryAttempts = 1,
+                HostDownloadAction = TorrentHostDownloadAction.DownloadAll, DownloadClient = RdtClient.Data.Enums.DownloadClient.Bezzad
+            };
+
+            var exe = new Download
+            {
+                DownloadId = Guid.NewGuid(), TorrentId = torrent.TorrentId, Path = "https://torbox.app/fakedl/1/2", Link = "https://download.invalid/exe",
+                FileName = "Codec.Installer.exe", Added = DateTimeOffset.UtcNow, DownloadQueued = DateTimeOffset.UtcNow.AddMinutes(-2)
+            };
+
+            // The video is already done, so only the executable is queued in this tick.
+            var video = new Download
+            {
+                DownloadId = Guid.NewGuid(), TorrentId = torrent.TorrentId, Path = "https://torbox.app/fakedl/1/1", Link = "https://download.invalid/mkv",
+                FileName = "Synthetic.Movie.mkv", Added = DateTimeOffset.UtcNow, DownloadQueued = DateTimeOffset.UtcNow.AddMinutes(-3),
+                DownloadStarted = DateTimeOffset.UtcNow.AddMinutes(-3), DownloadFinished = DateTimeOffset.UtcNow.AddMinutes(-1), Completed = DateTimeOffset.UtcNow.AddMinutes(-1)
+            };
+
+            seed.Torrents.Add(torrent);
+            seed.Downloads.AddRange(exe, video);
+            await seed.SaveChangesAsync();
+            exeId = exe.DownloadId;
+        }
+
+        var (runner, _, context) = Create();
+
+        await using var _ = context;
+
+        await runner.Tick();
+
+        Assert.Empty(_runnerState.ActiveDownloadClients);
+
+        await using var verify = CreateContext();
+        var after = await verify.Downloads.AsNoTracking().SingleAsync(m => m.DownloadId == exeId);
+        Assert.NotNull(after.Completed);
+        Assert.Null(after.DownloadStarted);
+        Assert.Equal(expectError, after.Error != null);
+    }
+
     [Fact]
     public async Task JobAlreadyDownloadingLocally_IsNotInterrupted()
     {

@@ -24,6 +24,12 @@ domain names in NZB subjects. Par2 files and other non-executable files are not 
 4. **At download creation**, after rdt-client refreshes the job from the provider: the refreshed file list and the exact files about to be queued are checked again before any download row is created.
 5. **At download start**, once the real file name is known: a single executable file is never started. That download is marked as errored, and the job then completes as failed.
 
+## Mixed releases (video plus executable)
+
+Setting: **General → Executable files in a release** (`General:ExecutableDownloadAction`).
+- **Fail the whole job** (the default, and recommended): any executable fails the release, so Sonarr/Radarr grab a different one.
+- **Skip only the executable files:** the rest of the release is downloaded and the executables are left out (a skipped file is marked complete with no error). A release that contains nothing but executables plus par2/nfo/sfv/txt/images is still failed. TorBox zipped downloads ("Prefer zipped downloads") cannot be split, so they are always failed.
+
 ## What "blocked" means
 
 - The job gets `Completed` plus an error that starts with `Blocked: contains executable files (...)`. Retries are

@@ -188,7 +188,7 @@ public class Torrents(
         // Pre-provider check: the NZB's own file list names the payload. Block before it is ever sent to the provider.
         if (settings.Current.General.BlockExecutableDownloads)
         {
-            var executables = ExecutableFileDetector.FindExecutablesInNzb(bytes);
+            var executables = ExecutableFileDetector.ExecutablesRequiringFailure(ExecutableFileDetector.GetNzbFileNamesOrEmpty(bytes), settings.Current.General.ExecutableDownloadAction);
 
             if (executables.Count > 0)
             {
@@ -449,7 +449,7 @@ public class Torrents(
                 // Not valid base64; the add below reports the problem as before.
             }
 
-            var executables = nzbBytes == null ? [] : ExecutableFileDetector.FindExecutablesInNzb(nzbBytes);
+            var executables = nzbBytes == null ? [] : ExecutableFileDetector.ExecutablesRequiringFailure(ExecutableFileDetector.GetNzbFileNamesOrEmpty(nzbBytes), settings.Current.General.ExecutableDownloadAction);
 
             if (executables.Count > 0)
             {
@@ -550,13 +550,34 @@ public class Torrents(
         // exact files about to be queued before any download row is created.
         if (settings.Current.General.BlockExecutableDownloads)
         {
-            var executables = ExecutableFileDetector.FindExecutables(torrent.Files.Select(m => m.Path).Concat(downloadInfos.Select(m => m.FileName)));
+            var action = settings.Current.General.ExecutableDownloadAction;
+            var allNames = torrent.Files.Select(m => m.Path).Concat(downloadInfos.Select(m => m.FileName)).ToList();
+            var executables = ExecutableFileDetector.FindExecutables(allNames);
 
             if (executables.Count > 0)
             {
-                await BlockExecutableTorrent(torrent, executables);
+                // A single zip from the provider bundles everything and cannot be split: always fail in that case.
+                var bundled = downloadInfos.Count == 1 && !ExecutableFileDetector.IsExecutable(downloadInfos[0].FileName) && downloadInfos[0].FileName?.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) == true;
+                var mustFail = bundled ? executables : ExecutableFileDetector.ExecutablesRequiringFailure(allNames, action);
 
-                return;
+                if (mustFail.Count > 0)
+                {
+                    await BlockExecutableTorrent(torrent, mustFail);
+
+                    return;
+                }
+
+                // Skip mode with other real content: queue everything except the executables.
+                logger.LogWarning("Skipping executable files {Files} {Torrent}", String.Join(", ", executables), torrent.ToLog());
+                downloadInfos = downloadInfos.Where(m => !ExecutableFileDetector.IsExecutable(m.FileName)).ToList();
+
+                if (downloadInfos.Count == 0)
+                {
+                    // Nothing left to download: fail rather than re-creating downloads every tick.
+                    await BlockExecutableTorrent(torrent, executables);
+
+                    return;
+                }
             }
         }
 

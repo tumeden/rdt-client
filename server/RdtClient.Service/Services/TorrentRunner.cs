@@ -557,12 +557,25 @@ public class TorrentRunner(
                     // Last line of defence: the real file name may only be known now (after unrestricting the link).
                     if (settings.Current.General.BlockExecutableDownloads && ExecutableFileDetector.IsExecutable(download.FileName))
                     {
-                        var blockedError = ExecutableFileDetector.BuildError([download.FileName!]);
-                        logger.LogWarning("Not downloading executable file {FileName} {Torrent}", download.FileName, torrent.ToLog());
+                        var otherDownloads = torrent.Downloads.Where(m => m.DownloadId != download.DownloadId).Select(m => m.FileName);
+                        var skipOnly = settings.Current.General.ExecutableDownloadAction == ExecutableDownloadAction.SkipExecutableFiles
+                                       && ExecutableFileDetector.HasOtherContent(otherDownloads);
 
-                        await downloads.UpdateError(download.DownloadId, blockedError);
+                        if (skipOnly)
+                        {
+                            // Skip mode: leave this file out, keep the rest of the release. Completed without error.
+                            logger.LogWarning("Skipping executable file {FileName} {Torrent}", download.FileName, torrent.ToLog());
+                        }
+                        else
+                        {
+                            var blockedError = ExecutableFileDetector.BuildError([download.FileName!]);
+                            logger.LogWarning("Not downloading executable file {FileName} {Torrent}", download.FileName, torrent.ToLog());
+
+                            await downloads.UpdateError(download.DownloadId, blockedError);
+                            download.Error = blockedError;
+                        }
+
                         await downloads.UpdateCompleted(download.DownloadId, DateTimeOffset.UtcNow);
-                        download.Error = blockedError;
                         download.Completed = DateTimeOffset.UtcNow;
 
                         continue;
@@ -732,7 +745,7 @@ public class TorrentRunner(
                 // downloaded to the host (covers magnets, NZB links and obfuscated NZBs the pre-provider check can't see).
                 if (settings.Current.General.BlockExecutableDownloads && torrent.Downloads.Count == 0)
                 {
-                    var executables = ExecutableFileDetector.FindExecutables(torrent.Files.Select(m => m.Path));
+                    var executables = ExecutableFileDetector.ExecutablesRequiringFailure(torrent.Files.Select(m => m.Path), settings.Current.General.ExecutableDownloadAction);
 
                     if (executables.Count > 0)
                     {

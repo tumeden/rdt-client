@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
+using RdtClient.Data.Enums;
 
 namespace RdtClient.Service.Helpers;
 
@@ -87,14 +88,52 @@ public static partial class ExecutableFileDetector
     /// <summary>Executables referenced by an NZB. Returns an empty list when the NZB cannot be parsed (fail open: the provider-side check still applies).</summary>
     public static IReadOnlyList<String> FindExecutablesInNzb(Byte[] nzbBytes)
     {
+        return FindExecutables(GetNzbFileNamesOrEmpty(nzbBytes));
+    }
+
+    /// <summary>File names in an NZB, or an empty list when it cannot be parsed.</summary>
+    public static IReadOnlyList<String> GetNzbFileNamesOrEmpty(Byte[] nzbBytes)
+    {
         try
         {
-            return FindExecutables(GetNzbFileNames(nzbBytes));
+            return GetNzbFileNames(nzbBytes);
         }
         catch (XmlException)
         {
             return [];
         }
+    }
+
+    /// <summary>Files that are not real content on their own (repair/info files).</summary>
+    private static readonly IReadOnlySet<String> SidecarExtensions = new HashSet<String>(StringComparer.OrdinalIgnoreCase)
+    {
+        ".par2", ".nfo", ".sfv", ".srr", ".nzb", ".txt", ".url", ".md5", ".sha1", ".jpg", ".jpeg", ".png"
+    };
+
+    /// <summary>True when there is at least one file that is neither executable nor a sidecar (par2/nfo/...).</summary>
+    public static Boolean HasOtherContent(IEnumerable<String?> fileNames)
+    {
+        return fileNames.Any(name => !String.IsNullOrWhiteSpace(name)
+                                     && !IsExecutable(name)
+                                     && !SidecarExtensions.Contains(Path.GetExtension(name.Trim()))
+                                     && !name.Trim().EndsWith(".par2", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    ///     Executables that require failing the whole job under <paramref name="action" />. Empty means "do not fail":
+    ///     either there are no executables, or (skip mode) there is other real content to keep.
+    /// </summary>
+    public static IReadOnlyList<String> ExecutablesRequiringFailure(IEnumerable<String?> fileNames, ExecutableDownloadAction action)
+    {
+        var names = fileNames.ToList();
+        var executables = FindExecutables(names);
+
+        if (executables.Count == 0)
+        {
+            return [];
+        }
+
+        return action == ExecutableDownloadAction.SkipExecutableFiles && HasOtherContent(names) ? [] : executables;
     }
 
     public static String BuildError(IReadOnlyList<String> executables)

@@ -122,3 +122,24 @@ public class ExecutableFileDetectorReviewFixesTest
         Assert.Equal(expected, RdtClient.Service.Services.DebridClients.TorBoxDebridClient.MapFilePath(input));
     }
 }
+
+public class ExecutableDownloadActionTest
+{
+    [Theory]
+    [InlineData(RdtClient.Data.Enums.ExecutableDownloadAction.FailJob, new[] { "show.mkv", "codec.exe" }, 1)]
+    [InlineData(RdtClient.Data.Enums.ExecutableDownloadAction.SkipExecutableFiles, new[] { "show.mkv", "codec.exe" }, 0)]
+    [InlineData(RdtClient.Data.Enums.ExecutableDownloadAction.SkipExecutableFiles, new[] { "show.part01.rar", "setup.exe" }, 0)]
+    [InlineData(RdtClient.Data.Enums.ExecutableDownloadAction.SkipExecutableFiles, new[] { "show.exe", "show.par2", "show.vol00+01.par2", "show.nfo" }, 1)]
+    [InlineData(RdtClient.Data.Enums.ExecutableDownloadAction.SkipExecutableFiles, new[] { "show.exe" }, 1)]
+    [InlineData(RdtClient.Data.Enums.ExecutableDownloadAction.FailJob, new[] { "show.mkv", "show.nfo" }, 0)]
+    public void ExecutablesRequiringFailure_RespectsMode(RdtClient.Data.Enums.ExecutableDownloadAction action, String[] names, Int32 expected)
+    {
+        Assert.Equal(expected, RdtClient.Service.Helpers.ExecutableFileDetector.ExecutablesRequiringFailure(names, action).Count);
+    }
+
+    [Fact]
+    public void DefaultAction_IsFailJob()
+    {
+        Assert.Equal(RdtClient.Data.Enums.ExecutableDownloadAction.FailJob, new RdtClient.Data.Models.Internal.DbSettings().General.ExecutableDownloadAction);
+    }
+}
