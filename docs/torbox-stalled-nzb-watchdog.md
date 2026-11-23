@@ -29,7 +29,7 @@ recreating any container, needs separate approval from the owner.
 | `server/RdtClient.Service/Services/StalledJobs/*` | Watchdog: pure evaluator, persisted state store, TorBox snapshot source, run orchestration. |
 | `server/RdtClient.Service/BackgroundServices/StalledJobWatchdogService.cs` | Hosted service. Waits 10 minutes after startup, wakes every 5 minutes, and runs only when the hourly slot is due. |
 | `server/RdtClient.Service/DiConfig.cs` | DI registration. |
-| `server/RdtClient.Service.Test/...` | 111 new tests (see below). |
+| `server/RdtClient.Service.Test/...` | 119 new tests (see below). |
 
 The TorBox status mapping was left alone on purpose. Mapping `processing` to `Finished` would make these jobs
 look successful, and mapping it to `Error` would fail jobs that are genuinely post-processing.
@@ -53,6 +53,7 @@ Cadence and provider load
 - On HTTP 429 or `slow_down` it backs off for `max(Retry-After, 1h)`. It also respects the shared
   `api.torbox.app` cooldown in `RateLimitCoordinator`. Other errors, or a null payload, back off for
   1h, 2h, 4h, 8h, then 12h. It never retries quickly.
+- Exactly one HTTP attempt per check: the watchdog uses its own `TorBoxWatchdogClient` with no retry/resilience handler (the app's shared TorBox clients retry 408/429/network errors twice). The attempt timestamp is persisted *before* the request, so a crash or restart mid-request cannot allow another check within the hour.
 - Existing provider polling settings (`CheckInterval` and others) are unchanged.
 
 Candidate (local), all of these must hold
@@ -115,8 +116,8 @@ Command (from `server/`):
 dotnet test RdtClient.sln
 ```
 
-Result on this branch (Windows, .NET SDK 10.0.403, 2026-11-23): `RdtClient.Service.Test` 380 passed, 0 failed
-(baseline 269 plus 111 new). `RdtClient.Web.Test` 37 passed, 0 failed.
+Result on this branch (Windows, .NET SDK 10.0.403, 2026-11-23): `RdtClient.Service.Test` 388 passed, 0 failed
+(baseline 269 plus 119 new). `RdtClient.Web.Test` 37 passed, 0 failed.
 
 Mutation check: with the old slot predicate restored, `WatchdogFailure_ReleasesSlot_AndQueuedJobAdvances...` and
 `BuiltInLifetimeExpiry_TerminalJobWithActiveLookingStatus_NoLongerBlocksQueue` both fail. With the fix they pass.

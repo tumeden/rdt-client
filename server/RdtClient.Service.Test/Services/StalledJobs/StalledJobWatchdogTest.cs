@@ -325,6 +325,35 @@ public class StalledJobWatchdogTest
     }
 
     [Fact]
+    public async Task AttemptTimestamp_IsPersistedBeforeProviderRequest_CrashCannotCauseEarlyRecheck()
+    {
+        _local.Add(SubmittedNzb("crash"));
+
+        // Snapshot of the on-disk state at the moment the request is in flight (i.e. what a crash would leave).
+        var diskAtCrash = new InMemoryStateStore();
+        DateTimeOffset? persistedAtRequest = null;
+
+        _snapshot.Setup(m => m.GetSnapshot())
+                 .Returns(() =>
+                 {
+                     persistedAtRequest = _store.State.LastRunAt;
+                     diskAtCrash.Save(_store.Load());
+
+                     throw new TaskCanceledException("process killed mid-request");
+                 });
+
+        await CreateWatchdog().RunOnce();
+
+        Assert.Equal(T0, persistedAtRequest);
+
+        // "Restarted" process reading only what was on disk at the crash, 30 minutes later.
+        _clock.Advance(TimeSpan.FromMinutes(30));
+
+        Assert.Equal(StalledJobRunOutcome.NotDue, (await CreateWatchdog(diskAtCrash).RunOnce()).Outcome);
+        _snapshot.Verify(m => m.GetSnapshot(), Times.Once);
+    }
+
+    [Fact]
     public async Task OverlappingRuns_SecondRunIsRejected()
     {
         _local.Add(SubmittedNzb("ov"));

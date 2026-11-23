@@ -109,6 +109,10 @@ public class StalledJobWatchdog(
             return new(StalledJobRunOutcome.NoCandidates, []);
         }
 
+        // Persist the attempt before contacting TorBox, so a crash or restart during the request cannot allow
+        // another check within the hour.
+        stateStore.Save(state);
+
         IReadOnlyList<ProviderUsenetJob?>? snapshot;
 
         try

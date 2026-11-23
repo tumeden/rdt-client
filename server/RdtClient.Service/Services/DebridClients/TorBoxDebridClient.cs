@@ -452,7 +452,7 @@ public class TorBoxDebridClient(
     ///     Raw JSON of one shared usenet/mylist request, for the stalled-job watchdog.
     ///     Raw on purpose: TorBox.NET deserializes active/download_present/download_finished into non-nullable
     ///     bools, so an omitted field would silently read as false. The watchdog parses presence itself.
-    ///     Uses the rate-limit aware client; 429 surfaces as RateLimitException with Retry-After.
+    ///     Uses the dedicated no-retry watchdog client (one attempt per check); 429 surfaces as RateLimitException with Retry-After.
     /// </summary>
     public virtual async Task<String> GetUsenetMyListJson()
     {
@@ -463,7 +463,7 @@ public class TorBoxDebridClient(
             throw new("TorBox API Key not set in the settings");
         }
 
-        var httpClient = httpClientFactory.CreateClient(DiConfig.TORBOX_CLIENT_SLOW);
+        var httpClient = httpClientFactory.CreateClient(DiConfig.TORBOX_WATCHDOG_CLIENT);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, UsenetMyListUrl);
         request.Headers.Authorization = new("Bearer", apiKey);

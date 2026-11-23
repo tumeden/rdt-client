@@ -22,6 +22,7 @@ public static class DiConfig
     public const String RD_CLIENT = "RdClient";
     public const String TORBOX_CLIENT = "TorBoxClient";
     public const String TORBOX_CLIENT_SLOW = "TorBoxClientSlow";
+    public const String TORBOX_WATCHDOG_CLIENT = "TorBoxWatchdogClient";
     public static readonly String UserAgent = $"rdt-client {Assembly.GetEntryAssembly()?.GetName().Version}";
 
     public static void RegisterRdtServices(this IServiceCollection services)
@@ -74,6 +75,24 @@ public static class DiConfig
         services.AddHostedService<StalledJobWatchdogService>();
     }
 
+    /// <summary>
+    ///     HTTP client for the hourly stall watchdog: exactly one attempt per check. No resilience/retry handler,
+    ///     so a 429, timeout or network failure ends the check immediately and the watchdog's own backoff applies.
+    ///     RateLimitHandler still turns 429 into RateLimitException (Retry-After) and honors shared cooldowns.
+    /// </summary>
+    public static IServiceCollection AddTorBoxWatchdogHttpClient(this IServiceCollection services)
+    {
+        services.TryAddTransient<RateLimitHandler>();
+
+        services.AddHttpClient(TORBOX_WATCHDOG_CLIENT, httpClient =>
+                {
+                    httpClient.Timeout = TimeSpan.FromSeconds(60);
+                })
+                .AddHttpMessageHandler<RateLimitHandler>();
+
+        return services;
+    }
+
     public static void RegisterHttpClients(this IServiceCollection services)
     {
         services.AddHttpClient();
@@ -87,6 +106,8 @@ public static class DiConfig
         });
 
         services.AddTransient<RateLimitHandler>();
+
+        services.AddTorBoxWatchdogHttpClient();
 
         services.AddHttpClient(RD_CLIENT)
                 .AddHttpMessageHandler<RateLimitHandler>()
