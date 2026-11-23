@@ -13,6 +13,7 @@ using RdtClient.Service.Middleware;
 using RdtClient.Service.Services;
 using RdtClient.Service.Services.DebridClients;
 using RdtClient.Service.Services.StalledJobs;
+using RdtClient.Service.Services.TorBoxCleanup;
 using RdtClient.Service.Wrappers;
 
 namespace RdtClient.Service;
@@ -57,6 +58,8 @@ public static class DiConfig
         services.AddSingleton<IStalledJobStateStore, StalledJobStateStore>();
         services.AddScoped<IUsenetSnapshotSource, TorBoxUsenetSnapshotSource>();
         services.AddScoped<StalledJobWatchdog>();
+        services.AddSingleton<IOrphanCleanupStateStore, OrphanCleanupStateStore>();
+        services.AddScoped<TorBoxOrphanCleanup>();
 
         services.AddSingleton<IDownloadableFileFilter, DownloadableFileFilter>();
         services.AddSingleton<ITrackerListGrabber, TrackerListGrabber>();
@@ -73,6 +76,7 @@ public static class DiConfig
         services.AddHostedService<WatchFolderChecker>();
         services.AddHostedService<WebsocketsUpdater>();
         services.AddHostedService<StalledJobWatchdogService>();
+        services.AddHostedService<TorBoxOrphanCleanupService>();
     }
 
     /// <summary>

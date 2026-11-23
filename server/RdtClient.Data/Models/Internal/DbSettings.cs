@@ -260,6 +260,14 @@ For HIGHWAY, log in to your HIGHWAY Center and create a token under ""Sitzungen"
     [Description("When the provider reports that an NZB cannot be completed (e.g. \"Aborted, cannot be completed\" or missing articles), mark it as failed straight away instead of resubmitting it. Retrying the same NZB cannot recover missing articles. Other provider errors still use the normal retry setting.")]
     public Boolean NoRetryIncompleteNzbs { get; set; } = true;
 
+    [DisplayName("TorBox leftover cleanup (TorBox only)")]
+    [Description("TorBox only. Checked hourly. Finds jobs on your TorBox account that are inactive and that rdt-client no longer tracks (for example left behind after being removed here). \"Report only\" logs what would be removed; \"Remove from TorBox\" deletes them from TorBox (at most 10 per hour). Files already on your host are never touched. WARNING: if other apps or another rdt-client use the same TorBox account, their jobs look like leftovers too - keep this Off or Report only in that case. Disabled while \"Automatically import\" is on.")]
+    public TorBoxOrphanCleanupMode TorBoxOrphanCleanup { get; set; } = TorBoxOrphanCleanupMode.Off;
+
+    [DisplayName("TorBox leftover minimum age (hours)")]
+    [Description("A TorBox job must be seen as an inactive leftover on every hourly check for at least this long before it is reported or removed. Minimum 6.")]
+    public Int32 TorBoxOrphanMinAgeHours { get; set; } = 24;
+
     [DisplayName("Auto Import Defaults")]
     public DbSettingsDefaultsWithCategory Default { get; set; } = new();
 }

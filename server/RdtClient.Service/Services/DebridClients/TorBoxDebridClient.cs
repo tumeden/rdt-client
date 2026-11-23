@@ -454,7 +454,40 @@ public class TorBoxDebridClient(
     ///     bools, so an omitted field would silently read as false. The watchdog parses presence itself.
     ///     Uses the dedicated no-retry watchdog client (one attempt per check); 429 surfaces as RateLimitException with Retry-After.
     /// </summary>
-    public virtual async Task<String> GetUsenetMyListJson()
+    public virtual Task<String> GetUsenetMyListJson()
+    {
+        return SendSingleAttempt(HttpMethod.Get, UsenetMyListUrl, null, "usenet/mylist");
+    }
+
+    public const String TorrentMyListUrl = "https://api.torbox.app/v1/api/torrents/mylist?bypass_cache=true&limit=1000";
+
+    /// <summary>Raw JSON of one torrents/mylist request (single attempt, no retries). Used by orphan cleanup.</summary>
+    public virtual Task<String> GetTorrentMyListJson()
+    {
+        return SendSingleAttempt(HttpMethod.Get, TorrentMyListUrl, null, "torrents/mylist");
+    }
+
+    /// <summary>
+    ///     Deletes one TorBox job by its numeric id (single attempt, no retries). Used only by orphan cleanup.
+    ///     Deleting a TorBox job does not touch files already downloaded to the host.
+    /// </summary>
+    public virtual async Task DeleteProviderJob(DownloadType type, Int64 id)
+    {
+        var (url, body) = type == DownloadType.Nzb
+            ? ("https://api.torbox.app/v1/api/usenet/controlusenetdownload", $$"""{"usenet_id":{{id}},"operation":"delete"}""")
+            : ("https://api.torbox.app/v1/api/torrents/controltorrent", $$"""{"torrent_id":{{id}},"operation":"delete"}""");
+
+        var response = await SendSingleAttempt(HttpMethod.Post, url, body, type == DownloadType.Nzb ? "usenet delete" : "torrent delete");
+
+        using var document = System.Text.Json.JsonDocument.Parse(response);
+
+        if (!document.RootElement.TryGetProperty("success", out var success) || success.ValueKind != System.Text.Json.JsonValueKind.True)
+        {
+            throw new HttpRequestException("TorBox rejected the delete request");
+        }
+    }
+
+    private async Task<String> SendSingleAttempt(HttpMethod method, String url, String? jsonBody, String label)
     {
         var apiKey = settings.Current.Provider.ApiKey;
 
@@ -465,8 +498,13 @@ public class TorBoxDebridClient(
 
         var httpClient = httpClientFactory.CreateClient(DiConfig.TORBOX_WATCHDOG_CLIENT);
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, UsenetMyListUrl);
+        using var request = new HttpRequestMessage(method, url);
         request.Headers.Authorization = new("Bearer", apiKey);
+
+        if (jsonBody != null)
+        {
+            request.Content = new StringContent(jsonBody, System.Text.Encoding.UTF8, "application/json");
+        }
 
         using var response = await httpClient.SendAsync(request);
 
@@ -475,12 +513,12 @@ public class TorBoxDebridClient(
             var delay = RateLimitHandler.GetRetryAfterDelay(response);
             coordinator.UpdateCooldown(TorBoxApiHost, delay);
 
-            throw new RateLimitException("TorBox usenet/mylist rate limited", delay);
+            throw new RateLimitException($"TorBox {label} rate limited", delay);
         }
 
         if (!response.IsSuccessStatusCode)
         {
-            throw new HttpRequestException($"TorBox usenet/mylist returned HTTP {(Int32) response.StatusCode}");
+            throw new HttpRequestException($"TorBox {label} returned HTTP {(Int32) response.StatusCode}");
         }
 
         return await response.Content.ReadAsStringAsync();
