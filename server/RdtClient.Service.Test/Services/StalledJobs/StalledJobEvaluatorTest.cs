@@ -318,25 +318,73 @@ public class StalledJobEvaluatorTest
     [Theory]
     [InlineData(0, null)]
     [InlineData(-1, null)]
-    [InlineData(1, 6)]
+    [InlineData(1, 1)]
+    [InlineData(3, 3)]
     [InlineData(6, 6)]
     [InlineData(12, 12)]
-    public void Threshold_ClampedToSixHours_ZeroDisables(Int32 configured, Int32? expectedHours)
+    public void Threshold_ConfiguredHoursHonored_ZeroDisables(Int32 configured, Int32? expectedHours)
     {
         Assert.Equal(expectedHours, StalledJobEvaluator.GetThreshold(configured)?.TotalHours is { } h ? (Int32) h : null);
     }
 
+    [Theory]
+    [InlineData(3)]
+    [InlineData(12)]
+    public void ConfiguredThreshold_IsUsed_WithoutProviderTimestamp(Int32 hours)
+    {
+        var job = SubmittedNzb($"cfg{hours}");
+
+        var (failedAt, _) = StalledJobEvaluatorTestRunner.RunHourly(job, $"cfg{hours}", hours);
+
+        Assert.Equal(hours, failedAt);
+    }
+
     [Fact]
-    public void Evaluate_NeverAcceptsThresholdBelowMinimum()
+    public void ThreeHourSetting_RetroactiveNeedsUpdatedAtOlderThan21h()
+    {
+        var job = SubmittedNzb("retro3");
+        var threshold = TimeSpan.FromHours(3);
+
+        StalledJobEvaluation Run(DateTimeOffset updatedAt)
+        {
+            var first = StalledJobEvaluator.Evaluate(T0, threshold, [job], [StalledJob("retro3", updatedAt)], new());
+
+            return StalledJobEvaluator.Evaluate(T0.AddHours(1), threshold, [job], [StalledJob("retro3", updatedAt)], first.State);
+        }
+
+        Assert.Empty(Run(T0.AddHours(-19)).ToFail); // 20h old at the confirming run
+        Assert.Single(Run(T0.AddHours(-22)).ToFail);
+    }
+
+    [Fact]
+    public void Evaluate_NeverAcceptsThresholdBelowOneHour()
     {
         var job = SubmittedNzb("min");
+        var state = StalledJobEvaluator.Evaluate(T0, TimeSpan.FromMinutes(1), [job], [StalledJob("min")], new()).State;
+
+        Assert.Empty(StalledJobEvaluator.Evaluate(T0.AddMinutes(30), TimeSpan.FromMinutes(1), [job], [StalledJob("min")], state).ToFail);
+        Assert.Single(StalledJobEvaluator.Evaluate(T0.AddHours(1), TimeSpan.FromMinutes(1), [job], [StalledJob("min")], state).ToFail);
+    }
+}
+
+internal static class StalledJobEvaluatorTestRunner
+{
+    /// <summary>Hourly runs with no provider timestamp; returns the run index of the first failure.</summary>
+    public static (Int32? failedAt, StalledJobState state) RunHourly(Torrent job, String hash, Int32 thresholdHours)
+    {
         var state = new StalledJobState();
 
-        for (var i = 0; i < 6; i++)
+        for (var i = 0; i < 48; i++)
         {
-            var result = StalledJobEvaluator.Evaluate(T0.AddHours(i), TimeSpan.FromMinutes(1), [job], [StalledJob("min")], state);
-            Assert.Empty(result.ToFail);
+            var result = StalledJobEvaluator.Evaluate(Fixtures.T0.AddHours(i), TimeSpan.FromHours(thresholdHours), [job], [Fixtures.StalledJob(hash)], state);
             state = result.State;
+
+            if (result.ToFail.Count > 0)
+            {
+                return (i, state);
+            }
         }
+
+        return (null, state);
     }
 }

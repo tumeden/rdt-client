@@ -25,11 +25,11 @@ recreating any container, needs separate approval from the owner.
 |---|---|
 | `server/RdtClient.Service/Services/TorrentRunner.cs` | New `OccupiesProviderSlot(Torrent)`: torrents with `Completed` or `Error` set never take a slot. Otherwise the upstream status rule is unchanged. Applies to every provider. |
 | `server/RdtClient.Service/Services/DebridClients/TorBoxDebridClient.cs` | New `GetUsenetMyListJson()`: one rate-limit-aware raw `usenet/mylist` request. Raw JSON is parsed by the watchdog so that a missing `active` / `download_present` / `download_finished` field reads as unknown (never as `false`). |
-| `server/RdtClient.Data/Models/Internal/DbSettings.cs` | New setting `Provider:StalledNzbTimeoutHours` (default 6, minimum 6, `0` turns it off). It shows up in the Settings UI under Provider. |
+| `server/RdtClient.Data/Models/Internal/DbSettings.cs` | New setting `Provider:StalledNzbTimeoutHours` (default 6, minimum 1, `0` turns it off). It shows up in the Settings UI under Provider. |
 | `server/RdtClient.Service/Services/StalledJobs/*` | Watchdog: pure evaluator, persisted state store, TorBox snapshot source, run orchestration. |
 | `server/RdtClient.Service/BackgroundServices/StalledJobWatchdogService.cs` | Hosted service. Waits 10 minutes after startup, wakes every 5 minutes, and runs only when the hourly slot is due. |
 | `server/RdtClient.Service/DiConfig.cs` | DI registration. |
-| `server/RdtClient.Service.Test/...` | 119 new tests (see below). |
+| `server/RdtClient.Service.Test/...` | 123 new tests (see below). |
 
 The TorBox status mapping was left alone on purpose. Mapping `processing` to `Finished` would make these jobs
 look successful, and mapping it to `Error` would fail jobs that are genuinely post-processing.
@@ -72,9 +72,9 @@ numeric id.
 Stall age
 - A fingerprint of state, progress, the three flags, size and `updated_at` is stored for each job. Any change
   resets the observed stall start to "now".
-- Normal path: the same fingerprint has been seen across at least 2 observations spanning **6h or more**.
+- Normal path: the same fingerprint has been seen across at least 2 observations spanning at least the **configured timeout** (default 6h, minimum 1h).
 - Retroactive path, for jobs that were already stuck: `updated_at` is present, not in the future, not before
-  `created_at`, and **at least 24h old** (the 6h threshold plus an 18h margin, because TorBox timestamp
+  `created_at`, and **at least timeout + 18h old** (24h at the default 6h; the margin, because TorBox timestamp
   timezone handling is uncertain by up to ±14h). In addition, our own observations must show the record
   unchanged for at least 55 minutes. In practice an already-stuck job is failed at the second hourly run.
   Local `Added` and provider `created_at` are never used as evidence.
@@ -116,8 +116,8 @@ Command (from `server/`):
 dotnet test RdtClient.sln
 ```
 
-Result on this branch (Windows, .NET SDK 10.0.403, 2026-11-23): `RdtClient.Service.Test` 388 passed, 0 failed
-(baseline 269 plus 119 new). `RdtClient.Web.Test` 37 passed, 0 failed.
+Result on this branch (Windows, .NET SDK 10.0.403, 2026-11-23): `RdtClient.Service.Test` 392 passed, 0 failed
+(baseline 269 plus 123 new). `RdtClient.Web.Test` 37 passed, 0 failed.
 
 Mutation check: with the old slot predicate restored, `WatchdogFailure_ReleasesSlot_AndQueuedJobAdvances...` and
 `BuiltInLifetimeExpiry_TerminalJobWithActiveLookingStatus_NoLongerBlocksQueue` both fail. With the fix they pass.

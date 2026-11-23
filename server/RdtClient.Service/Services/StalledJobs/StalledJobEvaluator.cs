@@ -13,8 +13,8 @@ public static class StalledJobEvaluator
     /// <summary>Evaluation / provider snapshot cadence. Hourly by requirement; never shorter.</summary>
     public static readonly TimeSpan EvaluationInterval = TimeSpan.FromHours(1);
 
-    /// <summary>Lowest allowed stall threshold, regardless of configuration.</summary>
-    public static readonly TimeSpan MinimumThreshold = TimeSpan.FromHours(6);
+    /// <summary>Lowest allowed stall threshold (one hourly check interval). The configured value is honored above this.</summary>
+    public static readonly TimeSpan MinimumThreshold = TimeSpan.FromHours(1);
 
     /// <summary>
     ///     Retroactive path: extra margin added on top of the threshold before a provider updated_at timestamp is
