@@ -335,22 +335,7 @@ public class TorrentRunner(
         }
 
         // Process torrent errors
-        foreach (var torrent in allTorrents.Where(m => m.Error != null && m.DeleteOnError > 0))
-        {
-            if (torrent.Completed == null)
-            {
-                continue;
-            }
-
-            if (torrent.Completed.Value.AddMinutes(torrent.DeleteOnError) > DateTime.UtcNow)
-            {
-                continue;
-            }
-
-            Log($"Removing torrent because it has been {torrent.DeleteOnError} minutes in the error state", torrent);
-
-            await torrents.Delete(torrent.TorrentId, true, true, true);
-        }
+        await RemoveFailedTorrents(allTorrents);
 
         // Process torrent lifetime
         foreach (var torrent in allTorrents.Where(m => m.Downloads.Count == 0 && m.Completed == null && m.Lifetime > 0))
@@ -871,6 +856,68 @@ public class TorrentRunner(
         }
 
         return torrent.RdStatus is not (TorrentStatus.Queued or TorrentStatus.Finished or TorrentStatus.Error);
+    }
+
+    /// <summary>
+    ///     Minutes after which a failed job is removed. A value set on the job itself wins; otherwise the main
+    ///     "qBittorrent / *darr" setting applies, so changing that setting also covers jobs that are already listed.
+    /// </summary>
+    public static Int32 GetDeleteOnErrorMinutes(Torrent torrent, DbSettings settings)
+    {
+        return torrent.DeleteOnError > 0 ? torrent.DeleteOnError : settings.Integrations.Default.DeleteOnError;
+    }
+
+    /// <summary>
+    ///     Removes at most one failed job per call, spaced out, oldest failure first. The list is only used to pick a
+    ///     candidate; <see cref="Torrents.RemoveFailed" /> re-checks everything before it deletes anything.
+    /// </summary>
+    private async Task RemoveFailedTorrents(IList<Torrent> allTorrents)
+    {
+        var state = runnerState.FailedRemovals;
+        var now = DateTimeOffset.UtcNow;
+
+        if (now < state.NextAllowedAt || coordinator.GetMaxNextAllowedAt() > now)
+        {
+            return;
+        }
+
+        var candidate = allTorrents.Where(m => Torrents.IsFailedRemovalDue(m, settings.Current, now) && state.IsAllowed(m.TorrentId, now))
+                                   .OrderBy(m => m.Completed)
+                                   .FirstOrDefault();
+
+        if (candidate == null)
+        {
+            return;
+        }
+
+        state.NextAllowedAt = now + state.Interval;
+
+        try
+        {
+            if (await torrents.RemoveFailed(candidate.TorrentId))
+            {
+                state.Forget(candidate.TorrentId);
+            }
+            else
+            {
+                // Nothing was due any more, or it is busy. Let the next one go first.
+                state.Postpone(candidate.TorrentId, now);
+            }
+        }
+        catch (RateLimitException ex)
+        {
+            // Wait as asked, for every removal. Not the job's fault, so it keeps its place.
+            var wait = ex.RetryAfter > state.RetryDelay ? ex.RetryAfter : state.RetryDelay;
+            state.NextAllowedAt = DateTimeOffset.UtcNow + wait;
+            logger.LogWarning("Removing failed jobs is paused for {Wait}, rate limited by the provider", wait);
+        }
+        catch (Exception ex)
+        {
+            // The job stays listed and is tried again later. Pause all removals, so an outage is not hit job by job.
+            var retryAt = state.Fail(candidate.TorrentId, now);
+            state.NextAllowedAt = DateTimeOffset.UtcNow + state.RetryDelay;
+            logger.LogWarning("Failed job not fully removed, it stays in the list and is tried again after {RetryAt}: {Message} {Torrent}", retryAt, ex.Message, candidate.ToLog());
+        }
     }
 
     public async Task SetRateLimit(TimeSpan retryAfter, String message)

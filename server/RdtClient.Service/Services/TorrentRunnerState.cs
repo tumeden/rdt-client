@@ -10,6 +10,8 @@ public interface ITorrentRunnerState
 
     Boolean IsPausedForLowDiskSpace { get; set; }
 
+    FailedJobRemovalState FailedRemovals { get; }
+
     (Int64 Speed, Int64 BytesTotal, Int64 BytesDone) GetStats(Guid downloadId);
 
     void Clear();
@@ -22,6 +24,8 @@ public class TorrentRunnerState : ITorrentRunnerState
     public ConcurrentDictionary<Guid, UnpackClient> ActiveUnpackClients { get; } = new();
 
     public Boolean IsPausedForLowDiskSpace { get; set; }
+
+    public FailedJobRemovalState FailedRemovals { get; } = new();
 
     public (Int64 Speed, Int64 BytesTotal, Int64 BytesDone) GetStats(Guid downloadId)
     {
@@ -43,5 +47,6 @@ public class TorrentRunnerState : ITorrentRunnerState
         ActiveDownloadClients.Clear();
         ActiveUnpackClients.Clear();
         IsPausedForLowDiskSpace = false;
+        FailedRemovals.Clear();
     }
 }

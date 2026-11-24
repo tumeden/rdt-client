@@ -100,7 +100,6 @@ public class TorrentDataStalledFailTests : IAsyncLifetime
         { "completed meanwhile", t => t.Completed = DateTimeOffset.UtcNow },
         { "errored meanwhile", t => t.Error = "other" },
         { "retry scheduled", t => t.Retry = DateTimeOffset.UtcNow },
-        { "DeleteOnError enabled", t => t.DeleteOnError = 30 },
         { "provider finished", t => t.RdStatus = TorrentStatus.Finished },
         { "provider error", t => t.RdStatus = TorrentStatus.Error },
         { "requeued locally", t => t.RdStatus = TorrentStatus.Queued },

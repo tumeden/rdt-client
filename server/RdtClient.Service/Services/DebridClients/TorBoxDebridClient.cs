@@ -468,6 +468,38 @@ public class TorBoxDebridClient(
     }
 
     /// <summary>
+    ///     Numeric id of a job this rdt-client tracks, from one shared list request. Null when TorBox no longer has it.
+    ///     Throws when the list cannot settle it (unreadable, incomplete, or more than one match), so nothing is guessed.
+    /// </summary>
+    public virtual async Task<Int64?> FindTrackedJobId(Torrent torrent)
+    {
+        var rdId = torrent.RdId?.Trim();
+        var json = torrent.Type == DownloadType.Nzb ? await GetUsenetMyListJson() : await GetTorrentMyListJson();
+        var jobs = TorBoxCleanup.TorBoxMyListParser.Parse(json, torrent.Type) ?? throw new HttpRequestException("TorBox returned an unreadable job list");
+
+        // NZBs are tracked by hash, torrents by numeric id (older ones by hash).
+        var matches = jobs.Where(m => m != null && (String.Equals(m.Hash?.Trim(), rdId, StringComparison.OrdinalIgnoreCase) || (torrent.Type == DownloadType.Torrent && m.Id?.ToString() == rdId)))
+                          .ToList();
+
+        if (matches.Count == 1)
+        {
+            return matches[0]!.Id;
+        }
+
+        if (matches.Count > 1)
+        {
+            throw new InvalidOperationException("TorBox lists this job more than once");
+        }
+
+        if (jobs.Count >= 1000 || jobs.Any(m => m == null || String.IsNullOrWhiteSpace(m.Hash)))
+        {
+            throw new InvalidOperationException("TorBox job list is incomplete");
+        }
+
+        return null;
+    }
+
+    /// <summary>
     ///     Deletes one TorBox job by its numeric id (single attempt, no retries). Used only by orphan cleanup.
     ///     Deleting a TorBox job does not touch files already downloaded to the host.
     /// </summary>
@@ -506,7 +538,9 @@ public class TorBoxDebridClient(
             request.Content = new StringContent(jsonBody, System.Text.Encoding.UTF8, "application/json");
         }
 
-        using var response = await httpClient.SendAsync(request);
+        // Deletes run while adding jobs is held up, so they get a short limit. Lists can be large.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(method == HttpMethod.Get ? 60 : 20));
+        using var response = await httpClient.SendAsync(request, timeout.Token);
 
         if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
         {

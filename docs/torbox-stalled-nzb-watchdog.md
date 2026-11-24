@@ -83,14 +83,14 @@ Stall age
 
 Mutation safety
 - Before mutating, the job is re-read from the DB only. It must still be a candidate with the same `RdId`
-  and no active download or unpack client. The write itself is one conditional `UPDATE ... WHERE` (`TorrentData.TryMarkStalledFailed`) that re-applies every guard atomically (not completed/errored/retrying, `DeleteOnError=0`, same `RdId`, status Processing/Downloading, no `Downloads` rows), so a concurrent scheduler, ProviderUpdater or API change makes it write nothing.
-- Jobs with `DeleteOnError > 0` are **skipped** with a warning, because the existing error handling would
-  later delete the provider job and local files.
+  and no active download or unpack client. The write itself is one conditional `UPDATE ... WHERE` (`TorrentData.TryMarkStalledFailed`) that re-applies every guard atomically (not completed/errored/retrying, same `RdId`, status Processing/Downloading, no `Downloads` rows), so a concurrent scheduler, ProviderUpdater or API change makes it write nothing.
+- "Delete download when in error" does not stop a stalled job from being failed. The watchdog deletes nothing itself;
+  once that many minutes have passed, the normal failed-job removal applies (see `docs/failed-job-removal.md`).
 - No more than 10 jobs are failed per run. The rest are deferred.
 - Nothing is deleted. No retry or resubmission is scheduled (`Retry` stays null and `RetryCount` is set to
   the maximum). Re-import cannot happen because the local row keeps its `RdId`.
 - The error text, which is shown in the UI and through the SAB/qBit APIs, starts with `Stalled at TorBox:` and
-  includes the evidence (observed hours or `updated_at`) plus "Provider job and files were not deleted."
+  includes the evidence (observed hours or `updated_at`) plus "Provider job and files were not deleted by the watchdog."
 - Logging: state changes and actionable failures are logged at Warning. Routine runs log at Debug only, so
   there are no success notifications. Logs contain no secrets.
 - Only one run can happen at a time (`SemaphoreSlim`). An overlapping run is rejected.
@@ -104,7 +104,7 @@ Going by the incident data (not re-verified live here): the 5 slot-holding jobs 
 `processing`/100%/inactive/not-present with provider timestamps unchanged for days would be failed at the
 **second** hourly run after deployment (about 1h10m after startup), and only if all of the following hold:
 (a) TorBox still returns them in `mylist` with that exact shape, (b) `updated_at` is at least 24h old and
-plausible, (c) nothing changes between the two runs, (d) `DeleteOnError` is 0 for them, and (e) they have no
+plausible, (c) nothing changes between the two runs, and (d) they have no
 `Downloads` rows. Any job without a usable `updated_at` waits 6 observed hours. The 122 unsubmitted jobs
 are never candidates.
 
@@ -137,7 +137,7 @@ Coverage:
 - `Services/StalledJobs/StalledJobWatchdogTest`: hourly cadence, no catch-up burst, provider error backoff,
   null payload, Retry-After handling (short and long), shared cooldown, no request when there are no
   candidates, disabled for other providers or with a 0 timeout or without a key, 122-job backlog untouched,
-  the stale-observation race, the DeleteOnError skip, overlapping runs, restart with the file store, and a
+  the stale-observation race, failing a job that has DeleteOnError set, overlapping runs, restart with the file store, and a
   corrupt state file.
 - `Services/TorrentRunnerTest`: the slot predicate for every status, both types, and terminal torrents.
 

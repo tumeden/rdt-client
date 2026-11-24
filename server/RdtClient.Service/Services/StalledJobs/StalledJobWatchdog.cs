@@ -219,20 +219,10 @@ public class StalledJobWatchdog(
             return false;
         }
 
-        if (current.DeleteOnError > 0)
-        {
-            // DeleteOnError would later delete the provider job and local files. The watchdog must not cause deletion.
-            logger.LogWarning("Stall watchdog: {TorrentName} ({TorrentId}) is stalled at TorBox but has DeleteOnError={DeleteOnError}; not marking failed to avoid deletion",
-                              current.RdName,
-                              current.TorrentId,
-                              current.DeleteOnError);
-
-            return false;
-        }
-
         // Same terminal state as the built-in lifetime expiry (retries exhausted, Completed + Error, no Retry),
         // but written with one conditional UPDATE that re-applies every guard atomically. If a download, retry,
-        // DeleteOnError or status change landed after the read above, nothing is written.
+        // or status change landed after the read above, nothing is written. DeleteOnError is the owner's own removal policy:
+        // it does not stop the job from being failed, and TorrentRunner applies it later as for any other error.
         if (!await torrentData.TryMarkStalledFailed(current.TorrentId, decision.RdId, decision.Reason, now))
         {
             logger.LogInformation("Stall watchdog: skipped {TorrentId}, local state changed before the failure write", decision.TorrentId);

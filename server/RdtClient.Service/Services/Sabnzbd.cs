@@ -163,7 +163,8 @@ public class Sabnzbd(ILogger<Sabnzbd> logger, Torrents torrents, AppSettings app
             ExcludeRegex = settings.Current.Integrations.Default.ExcludeRegex,
             TorrentRetryAttempts = settings.Current.Integrations.Default.TorrentRetryAttempts,
             DownloadRetryAttempts = settings.Current.Integrations.Default.DownloadRetryAttempts,
-            DeleteOnError = settings.Current.Integrations.Default.DeleteOnError,
+            // 0 = follow the main setting, which is read when the job fails (see TorrentRunner.GetDeleteOnErrorMinutes).
+            DeleteOnError = 0,
             Lifetime = settings.Current.Integrations.Default.TorrentLifetime,
             Priority = (priority ?? settings.Current.Integrations.Default.Priority) > 0 ? 1 : null
         };
@@ -190,7 +191,8 @@ public class Sabnzbd(ILogger<Sabnzbd> logger, Torrents torrents, AppSettings app
             ExcludeRegex = settings.Current.Integrations.Default.ExcludeRegex,
             TorrentRetryAttempts = settings.Current.Integrations.Default.TorrentRetryAttempts,
             DownloadRetryAttempts = settings.Current.Integrations.Default.DownloadRetryAttempts,
-            DeleteOnError = settings.Current.Integrations.Default.DeleteOnError,
+            // 0 = follow the main setting, which is read when the job fails (see TorrentRunner.GetDeleteOnErrorMinutes).
+            DeleteOnError = 0,
             Lifetime = settings.Current.Integrations.Default.TorrentLifetime,
             Priority = priority ?? (settings.Current.Integrations.Default.Priority > 0 ? settings.Current.Integrations.Default.Priority : null)
         };

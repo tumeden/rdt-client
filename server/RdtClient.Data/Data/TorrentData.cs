@@ -249,7 +249,6 @@ public class TorrentData(DataContext dataContext, ILogger<TorrentData>? logger =
                                                 && m.Completed == null
                                                 && m.Error == null
                                                 && m.Retry == null
-                                                && m.DeleteOnError <= 0
                                                 && (m.RdStatus == TorrentStatus.Processing || m.RdStatus == TorrentStatus.Downloading)
                                                 && !dataContext.Downloads.Any(d => d.TorrentId == torrentId))
                                     .ExecuteUpdateAsync(s => s.SetProperty(m => m.Completed, completed)
@@ -338,6 +337,46 @@ public class TorrentData(DataContext dataContext, ILogger<TorrentData>? logger =
         {
             logger?.LogDebug("Skipped torrent graph deletion because the torrent was not found. TorrentId: {torrentId}", torrentId);
         }
+    }
+
+    public async Task<Boolean> TryDeleteFailed(Torrent expected, Func<Boolean> stillWanted)
+    {
+        var expectedOpen = expected.Downloads.Count(m => m.Completed == null);
+
+        // The transaction takes SQLite's write lock up front, so the check and the deletes below cannot be interleaved.
+        await using var transaction = await dataContext.Database.BeginTransactionAsync();
+
+        var unchanged = await dataContext.Torrents
+                                         .Where(m => m.TorrentId == expected.TorrentId
+                                                     && m.Error != null
+                                                     && m.Retry == null
+                                                     && m.Completed == expected.Completed
+                                                     && m.RdId == expected.RdId
+                                                     && m.RdName == expected.RdName
+                                                     && m.Category == expected.Category
+                                                     && m.DeleteOnError == expected.DeleteOnError
+                                                     && dataContext.Downloads.Count(d => d.TorrentId == expected.TorrentId) == expected.Downloads.Count
+                                                     && dataContext.Downloads.Count(d => d.TorrentId == expected.TorrentId && d.Completed == null) == expectedOpen)
+                                         .ExecuteUpdateAsync(s => s.SetProperty(m => m.RetryCount, m => m.RetryCount));
+
+        if (unchanged != 1)
+        {
+            return false;
+        }
+
+        await dataContext.Downloads.Where(m => m.TorrentId == expected.TorrentId).ExecuteDeleteAsync();
+        await dataContext.TorrentPayloads.Where(m => m.TorrentId == expected.TorrentId).ExecuteDeleteAsync();
+        await dataContext.Torrents.Where(m => m.TorrentId == expected.TorrentId).ExecuteDeleteAsync();
+
+        // Last look at the settings. Returning without a commit rolls everything above back.
+        if (!stillWanted())
+        {
+            return false;
+        }
+
+        await transaction.CommitAsync();
+
+        return true;
     }
 
     private IQueryable<Torrent> BuildTorrentQuery(Boolean includePayload)

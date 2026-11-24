@@ -38,7 +38,7 @@ public class StalledJobWatchdogTest
                     {
                         var t = _local.First(m => m.TorrentId == id);
 
-                        if (t.RdId != rdId || t.Completed != null || t.Error != null || t.Downloads.Count > 0 || t.DeleteOnError > 0)
+                        if (t.RdId != rdId || t.Completed != null || t.Error != null || t.Downloads.Count > 0)
                         {
                             return false;
                         }
@@ -309,7 +309,7 @@ public class StalledJobWatchdogTest
     }
 
     [Fact]
-    public async Task DeleteOnError_Job_IsNotFailed_ToAvoidDeletion()
+    public async Task DeleteOnError_Job_IsStillFailed_AndNotDeletedByTheWatchdog()
     {
         var job = SubmittedNzb("doe");
         job.DeleteOnError = 30;
@@ -320,8 +320,10 @@ public class StalledJobWatchdogTest
         await watchdog.RunOnce();
         _clock.Advance(TimeSpan.FromHours(1));
 
-        Assert.Empty((await watchdog.RunOnce()).Failed);
-        Assert.Null(job.Completed);
+        Assert.Equal([job.TorrentId], (await watchdog.RunOnce()).Failed);
+        Assert.NotNull(job.Completed);
+        Assert.Equal(30, job.DeleteOnError);
+        VerifyNoDeletionOrResubmission();
     }
 
     [Fact]

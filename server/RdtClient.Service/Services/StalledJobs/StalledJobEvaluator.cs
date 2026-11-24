@@ -269,7 +269,7 @@ public static class StalledJobEvaluator
             {
                 var message = $"Stalled at TorBox: reported processing at 100%, inactive, download_finished=true, "
                               + $"download_present=false; {reason}. Marked failed by stall watchdog. "
-                              + $"Provider job and files were not deleted.";
+                              + $"Provider job and files were not deleted by the watchdog.";
 
                 eligible.Add(new(torrent.TorrentId, rdId, message, observation));
             }

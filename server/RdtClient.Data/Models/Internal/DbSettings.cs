@@ -355,7 +355,7 @@ public class DbSettingsDefaults
     public Int32 DownloadRetryAttempts { get; set; } = 3;
 
     [DisplayName("Delete download when in error")]
-    [Description("When a download has been in error for this many minutes, delete it from the provider and the client. 0 to disable.")]
+    [Description("When a download has been in error for this many minutes, delete it from the provider and the client, including its downloaded files. The value under qBittorrent / *darr also applies to every failed job already in the list that has no value of its own (0). 0 to disable.")]
     public Int32 DeleteOnError { get; set; } = 0;
 
     [DisplayName("Torrent maximum lifetime")]

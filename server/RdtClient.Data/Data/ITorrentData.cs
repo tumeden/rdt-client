@@ -35,4 +35,11 @@ public interface ITorrentData
     /// </summary>
     Task<Boolean> TryMarkStalledFailed(Guid torrentId, String expectedRdId, String error, DateTimeOffset completed);
     Task Delete(Guid torrentId);
+
+    /// <summary>
+    ///     Atomically deletes a failed job, only if it is still failed, not being retried, unchanged since it was
+    ///     read, and stillWanted returns true right before the commit.
+    ///     Returns false and deletes nothing otherwise.
+    /// </summary>
+    Task<Boolean> TryDeleteFailed(Torrent expected, Func<Boolean> stillWanted);
 }

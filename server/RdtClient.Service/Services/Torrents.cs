@@ -44,6 +44,9 @@ public class Torrents(
 
     private static readonly SemaphoreSlim TorrentResetLock = new(1, 1);
 
+    /// <summary>Held while a job is added or changed, and while a failed job is cleaned up. Always taken last.</summary>
+    private static readonly SemaphoreSlim OwnershipLock = new(1, 1);
+
     private static readonly JsonSerializerOptions JsonSerializerOptions = new()
     {
         ReferenceHandler = ReferenceHandler.IgnoreCycles
@@ -101,7 +104,16 @@ public class Torrents(
 
         Log($"Update category to {category}", torrent);
 
-        await torrentData.UpdateCategory(torrent.TorrentId, category);
+        await OwnershipLock.WaitAsync();
+
+        try
+        {
+            await torrentData.UpdateCategory(torrent.TorrentId, category);
+        }
+        finally
+        {
+            OwnershipLock.Release();
+        }
     }
 
     public virtual async Task<Torrent> AddNzbLinkToDebridQueue(String nzbLink, Torrent torrent)
@@ -728,6 +740,236 @@ public class Torrents(
         }
     }
 
+    /// <summary>Whether a failed job has been in error long enough to be removed. A pending retry is never due.</summary>
+    public static Boolean IsFailedRemovalDue(Torrent torrent, DbSettings settings, DateTimeOffset now)
+    {
+        var minutes = TorrentRunner.GetDeleteOnErrorMinutes(torrent, settings);
+
+        return torrent.Error != null
+               && torrent.Completed != null
+               && torrent.Retry == null
+               && minutes > 0
+               && torrent.Completed.Value.AddMinutes(minutes) <= now;
+    }
+
+    /// <summary>
+    ///     Removes one failed job: provider job, then its own downloaded files, then the list entry. The entry goes last,
+    ///     so anything that fails leaves the job listed and it is tried again later. Returns false, with nothing deleted,
+    ///     when the job is not (or no longer) due. Throws when the provider or a file could not be cleaned up.
+    ///     Holds the locks for retries, submission and sync, and adding or changing jobs, so ownership cannot change
+    ///     between the checks and the deletes. Lock order: reset, provider, ownership.
+    /// </summary>
+    public virtual async Task<Boolean> RemoveFailed(Guid torrentId)
+    {
+        await TorrentResetLock.WaitAsync();
+
+        try
+        {
+            await RealDebridUpdateLock.WaitAsync();
+
+            try
+            {
+                return await RemoveFailedLocked(torrentId);
+            }
+            finally
+            {
+                RealDebridUpdateLock.Release();
+            }
+        }
+        finally
+        {
+            TorrentResetLock.Release();
+        }
+    }
+
+    private async Task<Boolean> RemoveFailedLocked(Guid torrentId)
+    {
+        var torrent = await torrentData.GetById(torrentId);
+
+        if (torrent == null || !CanRemoveFailed(torrent))
+        {
+            return false;
+        }
+
+        // TorBox: look the job up first (one read-only request), so adding jobs is only held up by the delete itself.
+        Int64? torBoxId = null;
+
+        if (HasDeletableProviderJob(torrent, await torrentData.Get()) && DebridClient is TorBoxDebridClient lookup)
+        {
+            torBoxId = await lookup.FindTrackedJobId(torrent);
+        }
+
+        await OwnershipLock.WaitAsync();
+
+        try
+        {
+            // Everything again, now that no job can be added, changed, retried, submitted or synced.
+            var current = await torrentData.GetById(torrentId);
+
+            if (current == null || !CanRemoveFailed(current) || current.RdId != torrent.RdId)
+            {
+                return false;
+            }
+
+            var listed = await torrentData.Get();
+
+            if (HasDeletableProviderJob(current, listed))
+            {
+                if (DebridClient is TorBoxDebridClient torBox)
+                {
+                    if (torBoxId != null)
+                    {
+                        await torBox.DeleteProviderJob(current.Type, torBoxId.Value);
+                    }
+                }
+                else
+                {
+                    await DebridClient.Delete(current);
+                }
+            }
+
+            // A retry or settings change can arrive while the provider request is in flight.
+            // Preserve local files when cleanup is no longer wanted; the provider request cannot be recalled.
+            var afterProvider = await torrentData.GetById(torrentId);
+
+            if (afterProvider == null || !CanRemoveFailed(afterProvider)
+                || afterProvider.RdId != current.RdId || afterProvider.Category != current.Category
+                || afterProvider.RdName != current.RdName || afterProvider.Completed != current.Completed
+                || afterProvider.DeleteOnError != current.DeleteOnError)
+            {
+                return false;
+            }
+
+            DeleteOwnDownloadedFiles(afterProvider, listed);
+
+            if (!await torrentData.TryDeleteFailed(current, () => IsFailedRemovalDue(current, settings.Current, DateTimeOffset.UtcNow)))
+            {
+                logger.LogInformation("Failed job stays in the list, it was retried or changed during cleanup {Torrent}", current.ToLog());
+
+                return false;
+            }
+
+            logger.LogInformation("Removed failed job: {Error} {Torrent}", current.Error, current.ToLog());
+
+            return true;
+        }
+        finally
+        {
+            OwnershipLock.Release();
+        }
+    }
+
+    private Boolean CanRemoveFailed(Torrent torrent)
+    {
+        return IsFailedRemovalDue(torrent, settings.Current, DateTimeOffset.UtcNow)
+               && !torrent.Downloads.Any(m => runnerState.ActiveDownloadClients.ContainsKey(m.DownloadId) || runnerState.ActiveUnpackClients.ContainsKey(m.DownloadId));
+    }
+
+    /// <summary>Only a job this rdt-client submitted to the current provider, and that no other listed job uses.</summary>
+    private Boolean HasDeletableProviderJob(Torrent torrent, IEnumerable<Torrent> listed)
+    {
+        return !String.IsNullOrWhiteSpace(torrent.RdId)
+               && (torrent.ClientKind == null || torrent.ClientKind == settings.Current.Provider.Provider)
+               && !listed.Any(m => m.TorrentId != torrent.TorrentId && SharesProviderJob(m, torrent));
+    }
+
+    /// <summary>TorBox torrents can be stored by hash (older entries) or by numeric id, so both are compared.</summary>
+    private static Boolean SharesProviderJob(Torrent a, Torrent b)
+    {
+        if (a.Type != b.Type)
+        {
+            return false;
+        }
+
+        String?[] idsOfA = [a.RdId, a.Hash];
+        String?[] idsOfB = [b.RdId, b.Hash];
+
+        return idsOfA.Any(x => !String.IsNullOrWhiteSpace(x) && idsOfB.Any(y => String.Equals(x.Trim(), y?.Trim(), StringComparison.OrdinalIgnoreCase)));
+    }
+
+    /// <summary>
+    ///     Deletes only files rdt-client itself downloaded for this job, then folders that are empty because of it.
+    ///     Nothing is touched when another listed job has the same release name (whatever its category, because changing
+    ///     a category does not move files) or uses an overlapping folder, or when a path leaves the release folder.
+    /// </summary>
+    private void DeleteOwnDownloadedFiles(Torrent torrent, IEnumerable<Torrent> listed)
+    {
+        var started = torrent.Downloads.Where(m => m.DownloadStarted != null && !String.IsNullOrWhiteSpace(m.Link)).ToList();
+
+        if (started.Count == 0 || String.IsNullOrWhiteSpace(torrent.RdName))
+        {
+            return;
+        }
+
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(settings.Current.DownloadClient.DownloadPath));
+        var parent = Path.TrimEndingDirectorySeparator(Path.GetFullPath(DownloadPath(torrent, settings.Current)));
+        var folder = ReleaseFolder(torrent);
+
+        if (!IsSameOrInside(parent, root) || !IsSameOrInside(folder, parent) || IsSameOrInside(parent, folder))
+        {
+            logger.LogWarning("Files of a failed job are kept, its folder is not inside the download path {Torrent}", torrent.ToLog());
+
+            return;
+        }
+
+        foreach (var other in listed.Where(m => m.TorrentId != torrent.TorrentId && !String.IsNullOrWhiteSpace(m.RdName)))
+        {
+            var otherFolder = ReleaseFolder(other);
+
+            if (String.Equals(Path.GetFileName(otherFolder), Path.GetFileName(folder), StringComparison.OrdinalIgnoreCase)
+                || IsSameOrInside(otherFolder, folder)
+                || IsSameOrInside(folder, otherFolder))
+            {
+                logger.LogInformation("Files of a failed job are kept, another listed job may use them {Torrent}", torrent.ToLog());
+
+                return;
+            }
+        }
+
+        foreach (var download in started)
+        {
+            var relative = Uri.IsWellFormedUriString(download.Link, UriKind.Absolute) ? DownloadHelper.GetDownloadPath(torrent, download) : null;
+
+            if (relative == null)
+            {
+                continue;
+            }
+
+            var file = Path.GetFullPath(Path.Combine(parent, relative));
+
+            if (String.Equals(file, folder, StringComparison.OrdinalIgnoreCase) || !IsSameOrInside(file, folder))
+            {
+                continue;
+            }
+
+            if (File.Exists(file))
+            {
+                File.Delete(file);
+            }
+
+            for (var directory = Path.GetDirectoryName(file);
+                 directory != null && IsSameOrInside(directory, folder) && Directory.Exists(directory) && !Directory.EnumerateFileSystemEntries(directory).Any();
+                 directory = Path.GetDirectoryName(directory))
+            {
+                Directory.Delete(directory);
+            }
+        }
+    }
+
+    private String ReleaseFolder(Torrent torrent)
+    {
+        // Same folder name the downloaders use.
+        var name = DownloadHelper.RemoveInvalidPathChars(torrent.RdName!);
+
+        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(DownloadPath(torrent, settings.Current), name)));
+    }
+
+    private static Boolean IsSameOrInside(String path, String container)
+    {
+        return String.Equals(path, container, StringComparison.OrdinalIgnoreCase)
+               || path.StartsWith(container + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
     public async Task<String> UnrestrictLink(Guid downloadId)
     {
         var download = await downloads.GetById(downloadId) ?? throw new($"Download with ID {downloadId} not found");
@@ -1041,6 +1283,21 @@ public class Torrents(
 
     public async Task RetryDownload(Guid downloadId)
     {
+        // Not while the same job may be getting removed, or reset by a job retry.
+        await TorrentResetLock.WaitAsync();
+
+        try
+        {
+            await RetryDownloadLocked(downloadId);
+        }
+        finally
+        {
+            TorrentResetLock.Release();
+        }
+    }
+
+    private async Task RetryDownloadLocked(Guid downloadId)
+    {
         var download = await downloads.GetById(downloadId);
 
         if (download == null)
@@ -1193,27 +1450,37 @@ public class Torrents(
                                           DownloadType downloadType,
                                           Torrent torrent)
     {
-        var existingTorrent = await torrentData.GetByHash(infoHash);
+        await OwnershipLock.WaitAsync();
 
-        if (existingTorrent != null)
+        try
         {
-            return existingTorrent;
+            var existingTorrent = await torrentData.GetByHash(infoHash);
+
+            if (existingTorrent != null)
+            {
+                return existingTorrent;
+            }
+
+            return await torrentData.Add(null, infoHash, fileOrMagnetContents, isFile, downloadType, torrent.DownloadClient, torrent);
         }
-
-        var newTorrent = await torrentData.Add(null,
-                                               infoHash,
-                                               fileOrMagnetContents,
-                                               isFile,
-                                               downloadType,
-                                               torrent.DownloadClient,
-                                               torrent);
-
-        return newTorrent;
+        finally
+        {
+            OwnershipLock.Release();
+        }
     }
 
     public async Task Update(Torrent torrent)
     {
-        await torrentData.Update(torrent);
+        await OwnershipLock.WaitAsync();
+
+        try
+        {
+            await torrentData.Update(torrent);
+        }
+        finally
+        {
+            OwnershipLock.Release();
+        }
     }
 
     public async Task RunTorrentComplete(Guid torrentId, DbSettings? runSettings = null)
