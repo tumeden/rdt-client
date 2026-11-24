@@ -278,7 +278,11 @@ For HIGHWAY, log in to your HIGHWAY Center and create a token under ""Sitzungen"
 
 public class DbSettingsIntegrations
 {
-    public DbSettingsDefaultsWithCategory Default { get; set; } = new();
+    // Only here: this value is the main setting. Other sections stay at 0, so their jobs follow it too.
+    public DbSettingsDefaultsWithCategory Default { get; set; } = new()
+    {
+        DeleteOnError = 30
+    };
 }
 
 public class DbSettingsGui

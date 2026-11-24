@@ -1,6 +1,6 @@
 # Automatic removal of failed jobs
 
-Setting: **qBittorrent / *darr -> Delete download when in error** (minutes, `0` turns it off).
+Setting: **qBittorrent / *darr -> Delete download when in error** (minutes, default 30, `0` turns it off). The default is for new installs. A value that is already saved, including 0, is kept.
 
 - It applies to every failed job, including jobs already in the list, as soon as it is saved. A job with its own value
   above 0 uses that value instead.

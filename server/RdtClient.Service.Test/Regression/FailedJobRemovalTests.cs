@@ -230,6 +230,38 @@ public class FailedJobRemovalTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Default_IsThirtyMinutes_OnlyForTheMainSetting()
+    {
+        var settings = new DbSettings();
+
+        Assert.Equal(30, settings.Integrations.Default.DeleteOnError);
+        Assert.Equal(0, settings.Gui.Default.DeleteOnError);
+        Assert.Equal(0, settings.Watch.Default.DeleteOnError);
+        Assert.Equal(0, settings.Provider.Default.DeleteOnError);
+    }
+
+    [Theory]
+    [InlineData(null, "30")] // new install
+    [InlineData("0", "0")] // saved earlier, kept as it is
+    [InlineData("45", "45")]
+    public async Task Default_IsUsedForNewInstalls_AndNeverReplacesASavedValue(String? saved, String expected)
+    {
+        const String key = "Integrations:Default:DeleteOnError";
+
+        await using var context = CreateContext();
+
+        if (saved != null)
+        {
+            context.Settings.Add(new() { SettingId = key, Value = saved });
+            await context.SaveChangesAsync();
+        }
+
+        await new SettingData(context, Mock.Of<ILogger<SettingData>>()).Seed();
+
+        Assert.Equal(expected, (await context.Settings.AsNoTracking().SingleAsync(m => m.SettingId == key)).Value);
+    }
+
+    [Fact]
     public async Task ChangingTheMainSetting_AppliesToJobsAlreadyListed_OnTheNextTick()
     {
         _settings.Current.Integrations.Default.DeleteOnError = 0;
